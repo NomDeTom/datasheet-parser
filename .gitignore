@@ -1,0 +1,3 @@
+output/*
+extractor/__pycache__/
+*.pyc
