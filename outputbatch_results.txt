@@ -1,0 +1,65 @@
+
+Parsing bq25798.pdf ...
+  Device    : BQ25798 I2C Controlled, 1- to 4-Cell, 5-A Buck-Boost Battery Charger w
+  Package   : QFN(29) 4.0mm × 4.0mm
+  Key specs : VIN 3.6V–24V | VOUT 2.8V–22V | IMAX 5A | freq 1.5MHz
+  Registers : 57 found
+  Elec chars: 5 section(s), 301 spec(s)
+    [  8] Absolute Maximum Ratings — 18 spec(s)
+    [  8] ESD Ratings — 2 spec(s)
+    [  8] Recommended Operating Conditions — 15 spec(s)
+    [  9] Electrical Characteristics — 254 spec(s)
+    [ 18] Timing Requirements — 12 spec(s)
+  Written to output\bq25798/
+
+Parsing bq25895.pdf ...
+  Device    : BQ25895 I2C Controlled Single Cell 5-A Fast Charger with MaxChargeTM f
+  Package   : WQFN(24) 4.00mm × 4.00mm
+  Key specs : VIN 3.9V–14V | IMAX 5A | freq 1.5MHz
+  Registers : 21 found
+  Elec chars: 4 section(s), 164 spec(s)
+    [  6] Absolute Maximum Ratings — 2 spec(s)
+    [  6] ESD Ratings — 8 spec(s)
+    [  7] Electrical Characteristics — 135 spec(s)
+    [ 11] Timing Requirements — 19 spec(s)
+  Written to output\bq25895/
+
+Parsing bq25672 (1).pdf ...
+  Device    : BQ25672 I2C Controlled, 1- to 4-Cell, 3-A Buck Battery Charger with Du
+  Package   : QFN(29) 4.0mm × 4.0mm
+  Key specs : VIN 3.6V–24V | VOUT 5V–12V | IMAX 3A | freq 1.5MHz
+  Registers : 57 found
+  Elec chars: 5 section(s), 286 spec(s)
+    [  7] Absolute Maximum Ratings — 18 spec(s)
+    [  7] ESD Ratings — 2 spec(s)
+    [  7] Recommended Operating Conditions — 13 spec(s)
+    [  8] Electrical Characteristics — 241 spec(s)
+    [ 16] Timing Requirements — 12 spec(s)
+  Written to output\bq25672 (1)/
+
+Parsing tpsm83102 (1).pdf ...
+  Device    : TPSM83102 and TPSM83103 1.2A Output Current Buck-Boost Module
+Traceback (most recent call last):
+  File "D:\programming\datasheet-parser\parse.py", line 90, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\thoma\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\click\core.py", line 1442, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\thoma\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\click\core.py", line 1363, in main
+    rv = self.invoke(ctx)
+  File "C:\Users\thoma\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\click\core.py", line 1226, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\thoma\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\click\core.py", line 794, in invoke
+    return callback(*args, **kwargs)
+  File "D:\programming\datasheet-parser\parse.py", line 50, in main
+    click.echo(f"  Package   : {pkgs}")
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\thoma\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\click\utils.py", line 321, in echo
+    file.write(out)  # type: ignore
+    ~~~~~~~~~~^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3568.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u03bc' in position 14: character maps to <undefined>
