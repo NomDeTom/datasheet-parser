@@ -1,4 +1,4 @@
-"""Write extracted register and electrical characteristics data to JSON or CSV."""
+"""Write extracted register, electrical characteristics, and device info to JSON or CSV."""
 import csv
 import json
 from dataclasses import asdict
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from extractor.i2c_registers import Register
 from extractor.elec_chars import ElecSection
+from extractor.device_info import DeviceInfo
 
 
 # ── Registers ─────────────────────────────────────────────────────────────────
@@ -94,6 +95,14 @@ def _write_elec_csv(sections: list[ElecSection], path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+
+
+# ── Device Info ───────────────────────────────────────────────────────────────
+
+def write_device_info(info: DeviceInfo, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / "device_info.json"
+    path.write_text(json.dumps(asdict(info), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ── Legacy shim (keep old call sites working) ─────────────────────────────────
