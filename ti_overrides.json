@@ -1,0 +1,15 @@
+{
+  "_README": [
+    "Corrections applied AFTER a TI parametric export is overlaid, for fields where TI's own",
+    "selector database is demonstrably wrong. Each entry needs a 'why' recorded so the override",
+    "can be re-checked when TI republishes. Keyed by part number with all punctuation stripped",
+    "and uppercased (TPS552882-Q1 -> TPS552882Q1).",
+    "Only override where the evidence is explicit; a narrower recommended envelope is NOT an error."
+  ],
+
+  "TPS55287": {
+    "vin_max": 36,
+    "why": "TI's export field says 30, contradicted by its own Description column in the same row ('36V 4A buck-boost converter with I2C interface') and by the datasheet twice: title 'TPS55287 36-V, 4-A Buck-Boost Converter' and body 'has up to 36V input voltage capability' (SLVSGW6, Aug 2024). The resistor-set twin TPS552872 correctly reads 36 in the same export, and TPS55289 genuinely is a 30V part - so the 30 appears to be copied from the TPS55289 row.",
+    "checked": "2026-09-04"
+  }
+}
