@@ -20,6 +20,18 @@ Two halves that can be used independently:
 python -m pip install pdfplumber pypdf click
 ```
 
+Runs on Windows, macOS and Linux — no hardcoded paths. The vault is located by, first hit wins:
+
+1. `--vault /path/to/AutoNotes/Reference Material`
+2. the `AUTONOTES_VAULT` environment variable (`export` / `setx`)
+3. a `.autonotes-vault` file beside these scripts, holding the path on line 1
+4. conventional locations (`~/Clod/AutoNotes/...`, `~/Documents/Clod/...`, `~/Sync/Clod/...`,
+   and `D:`/`C:`/`E:` drive roots on Windows)
+
+Any of the vault root, its parent, or `Reference Material` itself is accepted. A path that does not
+contain `Component Index.md` or an `attachments/` folder is rejected with a message rather than
+producing a silently empty run.
+
 That is the whole dependency set. `requirements.txt` is **over-specified**: `camelot-py[cv]`,
 `opencv-python`, `pandas` and `rich` are never imported by any module, and `camelot-py[cv]`
 additionally needs a system Ghostscript install. (`pdfminer.six` is also listed but arrives
@@ -172,6 +184,11 @@ python classify.py                   # 3. product type, topology, manufacturer
 python verify_twins.py               # 4. check the result; non-zero exit on failure
 ```
 
+> [!] **Stages 2 and 3 must re-run after any `twin_notes.py` regeneration.** `--force` and
+> `--from-cache` rewrite frontmatter from the parse, discarding what `enrich_ti.py` and
+> `classify.py` added. `twin_notes.py` now prints a reminder, and `verify_twins.py` reports
+> "(nothing enriched yet)" if you forget.
+
 ### 1 · `twin_notes.py`
 
 Writes `<folder>/attachments/<stem> (datasheet).md` beside every PDF, with frontmatter holding
@@ -181,6 +198,13 @@ correctly, plus a body with the key-spec table, register map and elec-char secti
 **The ` (datasheet)` suffix is deliberate.** Obsidian resolves `[[wikilinks]]` by basename across the
 whole vault, and 35 PDF stems already collide with hand-written notes (`bq25601.pdf` ↔ `BQ25601.md`).
 On a case-insensitive filesystem, bare `<stem>.md` twins would make 35 existing links ambiguous.
+
+It also writes **`<stem>.registers.json`** beside each PDF for any part with an extracted register
+map — currently 24 files, 415 registers, 551 KB. The note's table keeps only addresses, names and
+field *names*; the sidecar keeps bit ranges, access, per-field reset values and the enum tables
+inside each field description. Before this, that detail existed only in gitignored `output/`, outside
+the vault and therefore unsynced and unbacked-up. The writer never deletes: if a part yielded
+registers once and a later parse yields none, the existing sidecar is the better data.
 
 `--from-cache` re-renders from `output/<stem>/*.json` without touching a PDF: **5 seconds for 207
 notes, against 105 minutes (6,324 s) to parse them.** Allow ~25 s on the first run after a
@@ -275,12 +299,20 @@ Confidence and flag distributions are informational — a low-confidence note is
   equation, not the sentence citing it.
 - **`D` is not one quantity.** In BQ25798 the buck equations use `D = V_SYS/V_BUS` and the boost
   equations use `D = 1 − V_BUS/V_SYS`. Reusing one duty cycle is wrong in one mode.
+- **Filesystem case behaviour differs.** `rglob('*.pdf')` matches `.PDF` too on Windows but not on
+  Linux, so both patterns are globbed and then deduped (`vaultpath.find_pdfs`). Comparison keys use
+  `os.path.normcase`, not `.lower()` — blanket lowercasing would merge `Foo.pdf` and `foo.pdf`,
+  which are two distinct files on a case-sensitive filesystem.
+- **Generated files are written with LF endings on every platform** (`vaultpath.write_text`).
+  Python's default would emit CRLF on Windows, so a vault synced between machines churned every
+  generated file on each regeneration.
 - **Don't write patch scripts with regex in heredocs.** `\\b` collapses to a literal backspace before
   Python sees it, so string matches fail with no useful error. Edit the file directly.
 
 ## Layout
 
 ```
+vaultpath.py        vault/tool discovery, case-safe paths, LF writes  (import first)
 parse.py            device info + elec chars + registers   (pdfplumber)
 textspec.py         parameters + topology claimed in prose (pdftotext)
 fuse.py             three-source voting, confidence, flags (imported)

@@ -53,7 +53,9 @@ import json
 import re
 from pathlib import Path
 
-DEFAULT_VAULT = Path(r"D:\Clod\AutoNotes\Reference Material")
+import vaultpath
+
+DEFAULT_VAULT = None        # resolved at run time by vaultpath.find_vault()
 PART_HEADER = "Product or Part number"
 OVERRIDES_PATH = Path(__file__).resolve().parent / "ti_overrides.json"
 
@@ -106,8 +108,15 @@ CONFLICT_KEYS = {"vin_min", "vin_max", "vout_min", "vout_max", "iout_max",
                  "vsupply_min", "vsupply_max"}
 
 
+# Browser download artifacts: "ina219 (1).pdf", "bq25672 (1).pdf", "spv1040 (2).pdf". Stripping
+# punctuation without removing these first turns INA219 into INA2191, which matches nothing — so the
+# part is silently never enriched. Only a trailing parenthesised 1-2 digit number is removed, so
+# genuine part numbers like INA2227 are untouched.
+_DL_ARTIFACT = re.compile(r"\s*\(\d{1,2}\)\s*$")
+
+
 def norm(text):
-    return re.sub(r"[^A-Z0-9]", "", (text or "").upper())
+    return re.sub(r"[^A-Z0-9]", "", _DL_ARTIFACT.sub("", (text or "").strip()).upper())
 
 
 def num(text):
@@ -270,7 +279,7 @@ def enrich(note: Path, rec, category, overrides=None, dry_run=False):
     body = body.rstrip("\n") + "\n" + "\n".join(block)
 
     if not dry_run:
-        note.write_text("---\n" + front.rstrip("\n") + "\n---\n" + body, encoding="utf-8")
+        vaultpath.write_text(note, "---\n" + front.rstrip("\n") + "\n---\n" + body)
     return mismatches
 
 
@@ -279,9 +288,12 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", type=Path, action="append", default=[])
     ap.add_argument("--csv-dir", type=Path)
-    ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT)
+    ap.add_argument("--vault", type=Path, default=None,
+                    help="vault Reference Material folder; else $AUTONOTES_VAULT, "
+                         ".autonotes-vault, or a conventional location")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    args.vault = vaultpath.find_vault(args.vault)
 
     paths = list(args.csv)
     if args.csv_dir:
@@ -306,10 +318,24 @@ def main():
     for note in sorted(args.vault.rglob("* (datasheet).md")):
         stem = note.stem.replace(" (datasheet)", "")
         key = norm(stem)
-        for category, table in exports:
-            rec = table.get(key)
-            if rec is None:
-                continue
+        # A part can appear in several exports — TI files INA3221 under both Amplifiers and Digital
+        # power monitors. Taking the first match meant filename order decided, so INA3221 got the
+        # Amplifiers row (almost no numeric columns) instead of the monitor row (common-mode range,
+        # ADC resolution, offset drift). Pick the export whose row actually carries the most mapped
+        # fields, and only fall back to order on a genuine tie.
+        candidates = [(category, table[key]) for category, table in exports if key in table]
+        if candidates:
+            def richness(rec):
+                return sum(1 for h in list(NUMERIC) + list(TEXT)
+                           if str(rec.get(h, "")).strip())
+            candidates.sort(key=lambda c: -richness(c[1]))
+            if len(candidates) > 1:
+                best, *rest = candidates
+                print(f"  · {stem:<20} in {len(candidates)} exports; chose [{best[0]}] "
+                      f"({richness(best[1])} fields) over "
+                      + ", ".join(f"[{c[0]}] ({richness(c[1])})" for c in rest))
+
+        for category, rec in candidates:
             result = enrich(note, rec, category, overrides.get(key), args.dry_run)
             if result is None:
                 print(f"  !! no frontmatter: {note.name}")

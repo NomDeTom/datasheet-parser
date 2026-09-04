@@ -32,6 +32,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import vaultpath
+
 # A number with an optional hyphen before its unit: "36-V", "36V", "36 V", "2.2-MHz"
 _N = r"(\d+(?:\.\d+)?)"
 _V = r"\s*-?\s*V(?:olts?)?\b"
@@ -197,6 +199,8 @@ def extract(pdf: Path, pages=2):
             capture_output=True, timeout=60,
         ).stdout.decode("utf-8", "replace")
     except Exception as exc:                                   # noqa: BLE001
+        if not vaultpath.have_tool("pdftotext"):
+            vaultpath.require_tool("pdftotext", "reading datasheet prose")
         return {"_error": f"pdftotext failed: {exc}", "_claims": []}
 
     claims, best, all_fragments = [], {}, []
@@ -233,7 +237,31 @@ def extract(pdf: Path, pages=2):
     best["_claims"] = claims
     best["_topology"] = derived
     best["_topology_terms"] = terms
+    best["_has_register_map"] = has_register_map(pdf)
     return best
+
+
+# Older TI datasheets (INA209/219/220/226/230/231) summarise their registers in ONE "Register Set
+# Summary" table — pointer address, name, function, reset value — and describe the bit fields in
+# prose. `extractor/i2c_registers.py` looks for per-register bit-field tables (BITS / FIELD /
+# ACCESS / RESET), which those documents do not contain, so it returns zero.
+#
+# Zero is then indistinguishable from "this part has no registers", which for an I2C power monitor
+# is plainly wrong. This flags the difference so a twin note can say "not extracted" instead.
+_REGISTER_HEADING = re.compile(
+    r"register (?:set summary|maps?|descriptions?|summary)|"
+    r"^\s*Table [\d-]+\.\s*Register|internal registers",
+    re.I | re.M)
+
+
+def has_register_map(pdf: Path):
+    """True when the document advertises a register map anywhere, regardless of its table format."""
+    try:
+        raw = subprocess.run(["pdftotext", "-layout", str(pdf), "-"],
+                             capture_output=True, timeout=120).stdout.decode("utf-8", "replace")
+    except Exception:                                          # noqa: BLE001
+        return False
+    return bool(_REGISTER_HEADING.search(raw))
 
 
 def main():

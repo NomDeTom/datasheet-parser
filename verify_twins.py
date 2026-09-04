@@ -12,7 +12,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-VAULT = Path(r"D:\Clod\AutoNotes\Reference Material")
+import vaultpath
+
+VAULT = vaultpath.find_vault()
 PARAMETRICS = VAULT / "TI Parametrics"
 SUFFIX = " (datasheet)"
 OVERRIDES_PATH = Path(__file__).resolve().parent / "ti_overrides.json"
@@ -51,12 +53,7 @@ def as_num(raw):
 
 
 def main():
-    seen, pdfs = set(), []
-    for pattern in ("*.pdf", "*.PDF"):          # case-insensitive on Windows — dedupe by path
-        for p in VAULT.rglob(pattern):
-            if p.parent.name.lower() == "attachments" and str(p).lower() not in seen:
-                seen.add(str(p).lower())
-                pdfs.append(p)
+    pdfs = vaultpath.find_pdfs(VAULT)
     twins = sorted(VAULT.rglob(f"*{SUFFIX}.md"))
     problems = []
 
@@ -64,8 +61,10 @@ def main():
     print(f"Twin notes          : {len(twins)}")
 
     # 1 — one twin per PDF
-    twin_stems = {t.stem.replace(SUFFIX, "").lower() for t in twins}
-    missing = sorted({p.stem.lower() for p in pdfs} - twin_stems)
+    # normcase, not .lower(): on a case-sensitive filesystem Foo.pdf and foo.pdf are
+    # two different files and must not be treated as one.
+    twin_stems = {vaultpath.path_key(t.stem.replace(SUFFIX, "")) for t in twins}
+    missing = sorted({p.stem for p in pdfs if vaultpath.path_key(p.stem) not in twin_stems})
     if missing:
         problems.append(f"{len(missing)} PDF(s) with no twin note")
         print(f"\n  MISSING TWINS ({len(missing)}): {', '.join(missing[:8])}"
@@ -76,8 +75,9 @@ def main():
     # 2 — no basename collision with the hand-written notes (would break [[wikilinks]])
     # Compare the actual note basenames: "bq24074 (datasheet)" vs "BQ24074" do NOT collide —
     # that suffix is the whole reason the twins are safe.
-    curated = {p.stem.lower() for p in VAULT.rglob("*.md") if not p.stem.endswith(SUFFIX)}
-    twin_names = {t.stem.lower() for t in twins}
+    curated = {vaultpath.path_key(p.stem) for p in VAULT.rglob("*.md")
+               if not p.stem.endswith(SUFFIX)}
+    twin_names = {vaultpath.path_key(t.stem) for t in twins}
     clashes = sorted(twin_names & curated)
     if clashes:
         problems.append(f"{len(clashes)} twin/curated basename collision(s)")
@@ -130,6 +130,47 @@ def main():
     else:
         print("  [ok] no inverted voltage ranges")
 
+    # 3b — register sidecars: present when the note claims registers, and self-consistent
+    sidecar_missing, sidecar_bad, sidecar_ok, sidecar_regs = [], [], 0, 0
+    for twin in twins:
+        front = frontmatter(twin)
+        if front is None:
+            continue
+        claimed = as_num(front.get("registers")) or 0
+        pdf_name = front.get("source_pdf", "").strip('"')
+        if not pdf_name:
+            continue
+        sidecar = twin.parent / (Path(pdf_name).stem + ".registers.json")
+        if claimed < 1:
+            continue
+        if not sidecar.exists():
+            sidecar_missing.append(twin.stem.replace(SUFFIX, ""))
+            continue
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception as exc:                                # noqa: BLE001
+            sidecar_bad.append(f"{sidecar.name}: unreadable ({exc})")
+            continue
+        actual = len(data.get("registers") or [])
+        if actual != int(claimed) or data.get("register_count") != actual:
+            sidecar_bad.append(
+                f"{sidecar.name}: note says {int(claimed)}, file holds {actual}, "
+                f"header says {data.get('register_count')}")
+            continue
+        sidecar_ok += 1
+        sidecar_regs += actual
+
+    if sidecar_missing:
+        problems.append(f"{len(sidecar_missing)} note(s) claim registers with no sidecar")
+        print(f"  MISSING SIDECAR: {', '.join(sidecar_missing[:6])}")
+    if sidecar_bad:
+        problems.append(f"{len(sidecar_bad)} inconsistent sidecar(s)")
+        for line in sidecar_bad[:5]:
+            print(f"  BAD SIDECAR: {line}")
+    if not sidecar_missing and not sidecar_bad:
+        print(f"  [ok] {sidecar_ok} register sidecar(s) consistent "
+              f"({sidecar_regs} registers persisted in the vault)")
+
     print(f"\nConfidence : " + ", ".join(f"{k}={v}" for k, v in conf.most_common()))
     print(f"Source     : " + ", ".join(f"{k}={v}" for k, v in sources.most_common()))
     print(f"Verified   : {verified}")
@@ -159,8 +200,21 @@ def main():
             rec = table.get(norm(twin.stem.replace(SUFFIX, "")))
             if not rec:
                 continue
+            # Vin/Vout only exist in the DC/DC export. Checking just those meant the battery and
+            # digital-power-monitor enrichments were reported as "all match" without a single value
+            # being compared — so the fields those exports actually carry are checked too.
             for header_name, key in (("Vin (min) (V)", "vin_min"), ("Vin (max) (V)", "vin_max"),
-                                     ("Vout (min) (V)", "vout_min"), ("Vout (max) (V)", "vout_max")):
+                                     ("Vout (min) (V)", "vout_min"), ("Vout (max) (V)", "vout_max"),
+                                     ("Iout (max) (A)", "iout_max"),
+                                     ("Supply voltage (min) (V)", "vsupply_min"),
+                                     ("Supply voltage (max) (V)", "vsupply_max"),
+                                     ("Common-mode voltage (min) (V)", "vcm_min"),
+                                     ("Common-mode voltage (max) (V)", "vcm_max"),
+                                     ("Resolution (Bits)", "resolution_bits"),
+                                     ("Number of channels", "channels"),
+                                     ("Charge current (max) (A)", "charge_current_max_a"),
+                                     ("Number of series cells (min)", "cells_min"),
+                                     ("Number of series cells (max)", "cells_max")):
                 want, got = as_num(rec.get(header_name)), as_num(front.get(key))
                 if want is None:
                     continue

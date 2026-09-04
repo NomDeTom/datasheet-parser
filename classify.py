@@ -27,7 +27,9 @@ import re
 from collections import Counter
 from pathlib import Path
 
-DEFAULT_VAULT = Path(r"D:\Clod\AutoNotes\Reference Material")
+import vaultpath
+
+DEFAULT_VAULT = None        # resolved at run time by vaultpath.find_vault()
 SUFFIX = " (datasheet)"
 
 # The canonical set. Order matters only for reporting.
@@ -327,6 +329,18 @@ def steps_down(front):
 def classify(note: Path, front, curated=None):
     """-> (product_type, decided_by)"""
     category = read_field(front, "ti_category").lower()
+
+    # "Amplifiers" is TI's broadest catch-all — it lists current-sense parts that are really digital
+    # power monitors (INA701, INA3221), and its export carries almost no numeric columns. Where the
+    # curated index has an opinion about such a part, that opinion is more specific, so let it win.
+    # Without this, INA701 reads "amplifier" while INA209/219/220 read "power-monitor" — the same
+    # kind of part filed two different ways.
+    if category == "amplifiers":
+        weak = ((curated or {}).get(read_field(front, "source_pdf").lower())
+                or (curated or {}).get(note.stem.replace(SUFFIX, "").lower()))
+        if weak:
+            return weak[0], "curated-index (over TI Amplifiers)"
+
     if category in TI_CATEGORY:
         # A DC/DC-category part that TI itself calls a charger is a charger.
         sub = read_field(front, "ti_subcategory").lower()
@@ -363,9 +377,12 @@ def classify(note: Path, front, curated=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT)
+    ap.add_argument("--vault", type=Path, default=None,
+                    help="vault Reference Material folder; else $AUTONOTES_VAULT, "
+                         ".autonotes-vault, or a conventional location")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    args.vault = vaultpath.find_vault(args.vault)
 
     curated = load_curated(args.vault)
     print(f"curated index: {len(curated)} datasheet name(s) already sorted into sections")
@@ -422,7 +439,7 @@ def main():
                           "true" if product_type in CONVERTS else "false")
 
         if not args.dry_run:
-            note.write_text("---\n" + front.rstrip("\n") + "\n---\n" + body, encoding="utf-8")
+            vaultpath.write_text(note, "---\n" + front.rstrip("\n") + "\n---\n" + body)
 
     print(f"{sum(counts.values())} note(s) classified"
           + (" (dry run — nothing written)" if args.dry_run else ""))

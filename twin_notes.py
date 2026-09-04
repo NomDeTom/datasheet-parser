@@ -33,9 +33,10 @@ from pathlib import Path
 
 from fuse import fuse, fmt as fuse_fmt
 import textspec
+import vaultpath
 
 PARSER_DIR = Path(__file__).resolve().parent
-DEFAULT_VAULT = Path(r"D:\Clod\AutoNotes\Reference Material")
+DEFAULT_VAULT = None        # resolved at run time by vaultpath.find_vault()
 SUFFIX = " (datasheet)"
 
 # ── unit handling ────────────────────────────────────────────────────────────
@@ -105,6 +106,36 @@ def load_cache(pdf: Path):
 
     return (load("device_info.json"), load("registers.json") or [],
             load("elec_chars.json") or [], None, load("textspec.json") or {})
+
+
+def write_registers_sidecar(pdf: Path, registers):
+    """Persist the full register map into the vault, beside its PDF, as `<stem>.registers.json`.
+
+    The twin note's table keeps only addresses, names and field *names* — 607 KB of extracted detail
+    renders down to about 40 KB of Markdown. Everything that matters for driver work (bit ranges,
+    access, per-field reset values, and the enum tables inside each field description) existed only
+    in `datasheet-parser/output/`, which is gitignored, sits outside the vault so Syncthing never
+    sees it, and costs ~30 s per part to rebuild.
+
+    Never deletes: if a part yielded registers once and a later parse yields none, the existing
+    sidecar is the better data and is left alone.
+    """
+    if not registers:
+        return None
+    target = pdf.with_name(pdf.stem + ".registers.json")
+    payload = {
+        "part": pdf.stem,
+        "source_pdf": pdf.name,
+        "register_count": len(registers),
+        "generated": str(date.today()),
+        "generator": "twin_notes.py + datasheet-parser/extractor/i2c_registers.py",
+        "verified": False,
+        "note": "Machine-extracted from the datasheet's per-register bit-field tables. "
+                "Check against the PDF before writing driver code.",
+        "registers": registers,
+    }
+    vaultpath.write_text(target, json.dumps(payload, indent=1, ensure_ascii=False))
+    return target
 
 
 def cache_textspec(pdf: Path):
@@ -207,8 +238,13 @@ def build_note(pdf: Path, info, registers, elec, note_error, size_mb, text=None)
     lines = ["---", "type: datasheet"]
     if iface:
         lines.append("interface: [" + ", ".join(yaml_scalar(i) for i in iface) + "]")
-    if fused["flags"]:
-        lines.append("flags: [" + ", ".join(yaml_scalar(f) for f in fused["flags"]) + "]")
+    # A part whose datasheet advertises a register map but from which none was extracted: report the
+    # gap rather than letting registers:0 read as "this part has no registers".
+    extra_flags = list(fused["flags"])
+    if (text or {}).get("_has_register_map") and not registers:
+        extra_flags.append("register_map_not_extracted")
+    if extra_flags:
+        lines.append("flags: [" + ", ".join(yaml_scalar(f) for f in extra_flags) + "]")
     if note_error:
         lines.append("parse_error: " + yaml_scalar(note_error))
     lines += [f"{k}: {v}" for k, v in fields]
@@ -278,6 +314,11 @@ def build_note(pdf: Path, info, registers, elec, note_error, size_mb, text=None)
                 f"| {clean(reg.get('reset'))} | {names[:200]} |"
             )
         lines.append("")
+        lines.append(f"Full detail — bit ranges, access, per-field reset values, and the enum tables "
+                     f"inside each field description — is in "
+                     f"**[[{pdf.stem}.registers.json]]**, beside the PDF. "
+                     f"This table is only a summary of it.")
+        lines.append("")
 
     if elec:
         lines += ["## Electrical Characteristics — sections found", ""]
@@ -305,7 +346,9 @@ def fmt_range(lo, hi):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--vault", type=Path, default=DEFAULT_VAULT)
+    ap.add_argument("--vault", type=Path, default=None,
+                    help="vault Reference Material folder; else $AUTONOTES_VAULT, "
+                         ".autonotes-vault, or a conventional location")
     ap.add_argument("--force", action="store_true", help="regenerate notes that already exist")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--only", default="", help="substring filter on the PDF filename")
@@ -316,26 +359,18 @@ def main():
                     help="re-render notes from output/<stem>/*.json without re-parsing the PDFs "
                          "(seconds instead of hours; implies --force)")
     args = ap.parse_args()
+    args.vault = vaultpath.find_vault(args.vault)
+    vaultpath.require_tool('pdftotext', 'textspec.py prose extraction')
     if args.from_cache:
         args.force = True
 
-    # rglob is case-insensitive on Windows, so a single *.pdf pattern already catches .PDF —
-    # globbing both and concatenating listed every file twice.
-    seen, pdfs = set(), []
-    for pattern in ("*.pdf", "*.PDF"):
-        for p in sorted(args.vault.rglob(pattern)):
-            if p.parent.name.lower() != "attachments":
-                continue
-            key = str(p).lower()
-            if key not in seen:
-                seen.add(key)
-                pdfs.append(p)
+    pdfs = vaultpath.find_pdfs(args.vault)
     if args.only:
         pdfs = [p for p in pdfs if args.only.lower() in p.name.lower()]
     if args.limit:
         pdfs = pdfs[: args.limit]
 
-    made = skipped = stubbed = failed = 0
+    made = skipped = stubbed = failed = sidecars = 0
     started = time.time()
     print(f"{len(pdfs)} PDF(s) under {args.vault}", flush=True)
 
@@ -350,7 +385,7 @@ def main():
             body = build_note(pdf, {}, [], [],
                               f"skipped: {size_mb:.1f}MB exceeds --max-mb {args.max_mb} "
                               f"(reference manuals are not parameter sources)", size_mb, {})
-            note.write_text(body, encoding="utf-8")
+            vaultpath.write_text(note, body)
             stubbed += 1
             print(f"[{i}/{len(pdfs)}] STUB  {pdf.name} ({size_mb:.1f}MB)", flush=True)
             continue
@@ -359,7 +394,7 @@ def main():
             info, registers, elec, err, text = load_cache(pdf)
             # Backfill for parses made before textspec existed, and refresh caches written before
             # topology detection was added — otherwise a stale cache silently omits the new keys.
-            if info is not None and (not text or "_topology" not in text):
+            if info is not None and (not text or "_has_register_map" not in text):
                 text = cache_textspec(pdf)
             if err and size_mb > args.max_mb:
                 err = (f"skipped: {size_mb:.1f}MB exceeds --max-mb {args.max_mb} "
@@ -367,7 +402,9 @@ def main():
         else:
             info, registers, elec, err, text = run_parser(pdf, args.timeout)
         body = build_note(pdf, info or {}, registers, elec, err, size_mb, text)
-        note.write_text(body, encoding="utf-8")
+        vaultpath.write_text(note, body)
+        if write_registers_sidecar(pdf, registers):
+            sidecars += 1
         if err:
             failed += 1
             print(f"[{i}/{len(pdfs)}] FAIL  {pdf.name}: {err}", flush=True)
@@ -377,8 +414,18 @@ def main():
             print(f"[{i}/{len(pdfs)}] ok    {pdf.name} -> {part}", flush=True)
 
     print(f"\ndone in {time.time() - started:.0f}s — "
-          f"{made} parsed, {stubbed} stubbed (too large), {failed} failed, {skipped} skipped",
+          f"{made} parsed, {stubbed} stubbed (too large), {failed} failed, {skipped} skipped, "
+          f"{sidecars} register sidecar(s) written",
           flush=True)
+
+    if args.force or args.from_cache:
+        # Regenerating rewrites the frontmatter from the parse, which discards whatever
+        # enrich_ti.py and classify.py had added. Easy to forget, and the symptom is a silently
+        # un-enriched vault.
+        print("NOTE: regenerated notes have lost their enrichment/classification. Re-run:\n"
+              "        python enrich_ti.py --csv-dir <dir>\n"
+              "        python classify.py\n"
+              "        python verify_twins.py", flush=True)
 
 
 if __name__ == "__main__":
