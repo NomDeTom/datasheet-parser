@@ -1,0 +1,10 @@
+#!/bin/bash
+# WSL shim: no poppler here, so run Git for Windows' pdftotext.exe and hand it
+# Windows-style paths for any argument that names an existing file or directory.
+exe="/mnt/c/Program Files/Git/mingw64/bin/pdftotext.exe"
+args=()
+for a in "$@"; do
+  [ -e "$a" ] && a=$(wslpath -w "$a")
+  args+=("$a")
+done
+exec "$exe" "${args[@]}"

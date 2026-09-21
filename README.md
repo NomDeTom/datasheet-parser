@@ -18,9 +18,11 @@ Two halves that can be used independently:
 
 ```bash
 python -m pip install pdfplumber pypdf click
+python -m pip install pymupdf        # only for papers.py
 ```
 
-Runs on Windows, macOS and Linux — no hardcoded paths. The vault is located by, first hit wins:
+Runs on Windows, macOS and Linux — no hardcoded paths. Under WSL see [Running under WSL](#running-under-wsl):
+the scripts are unchanged, but `pdftotext` has to be borrowed from the Windows side. The vault is located by, first hit wins:
 
 1. `--vault /path/to/AutoNotes/Reference Material`
 2. the `AUTONOTES_VAULT` environment variable (`export` / `setx`)
@@ -49,7 +51,35 @@ Backends, so you know what a given script costs:
 | `pdfplumber` | `parse.py` and everything under `extractor/` | ~30 s per 50-page datasheet |
 | `pypdf` | `trm.py` via `extractor/textindex.py` | ~10× faster, plain text only |
 | `pdftotext` | `textspec.py` | ~0.2 s per PDF |
+| `pymupdf` | `papers.py` | ~1 s per 36-page paper; the only backend with column geometry |
 | `zipfile` + `xml.etree` | `xlsx_to_csv.py` | instant |
+
+## The inbox: `input/<type>/` and `batch.py`
+
+Files are sorted by type *before* parsing, so the folder decides the toolchain and a batch can be
+staged ahead of time:
+
+```
+input/datasheets/    -> parse.py            device info, elec-char tables, register maps
+input/papers/        -> papers.py extract   column-aware text + inventory line
+input/manuals/       -> trm.py index        page-indexed text cache
+input/parametrics/   -> xlsx_to_csv.py      vendor .xlsx -> output/<stem>.csv
+```
+
+```bash
+python batch.py --dry-run                                  # the plan, nothing runs
+python batch.py                                            # all types; originals -> processed/<type>/
+python batch.py --type papers --dest ~/<vault>/MeshBench/2026-09-20-research
+```
+
+When a file has been processed its original is **moved out**, so `input/` is clean again: to
+`--dest` (the vault folder the notes will live in — for papers the text sidecars go to
+`<dest>/text/` where the notes expect them), or to the gitignored `processed/<type>/` when no
+destination is given. Nothing is deleted; a file whose target already exists is left where it is
+and reported. A tool that exits non-zero also leaves its input in place, and `batch.py` exits 1.
+
+The folder tree is the routing table, so the empty folders are committed (`.gitkeep`); their
+contents never are.
 
 ---
 
@@ -59,7 +89,7 @@ Backends, so you know what a given script costs:
 
 ```bash
 python parse.py datasheet.pdf
-python parse.py --all                       # every PDF in datasheets/
+python parse.py --all                       # every PDF in input/datasheets/
 python parse.py datasheet.pdf --format csv
 python parse.py datasheet.pdf --elec-only   # or --registers-only
 python parse.py datasheet.pdf --generic     # force the non-TI extractor
@@ -169,6 +199,27 @@ Reads `xl/worksheets/sheetN.xml` directly. **openpyxl cannot open TI's exports a
 stylesheet raises `ValueError: Colors must be aRGB hex values` and the whole workbook is refused.
 It also recovers part numbers from `HYPERLINK("url","LM65440-Q1")` formulas, which have no cached
 value: without that, column A reads as empty and you get 1,594 rows with no part numbers.
+
+### `papers.py` — research papers (two-column journal PDFs)
+
+`trm.py` is for manuals; `papers.py` is the same idea for papers, which pdfplumber/pypdf read
+badly because their two columns interleave when text is ordered by y alone. It uses pymupdf's block
+geometry to emit the left column before the right, folds line-end hyphenation, and detects the
+DOI / arXiv id and title.
+
+```bash
+python papers.py inventory <folder>            # pages, text layer or SCANNED, year, DOI/arXiv, title
+python papers.py extract   <folder>            # -> output/<stem>/text.txt, same markers as trm.py
+python papers.py extract   <folder> -o <dir>   # -> <dir>/<stem>.txt, for sidecars beside vault notes
+python papers.py outline   paper.pdf           # numbered headings with pages (noisy on IEEE layouts)
+python papers.py skeleton  paper.pdf -o note.md
+python papers.py render    paper.pdf 12        # PNG of one page — equations never survive the text layer
+```
+
+The cache uses `trm.py`'s `=== PAGE n ===` markers at the same path, so once a paper is extracted
+`trm.py find paper.pdf "co-channel rejection"` works on it. The reading itself — what the paper
+claims, which numbers to lift, what they mean for a project — is a by-hand pass described in
+`.claude/skills/paper-importer/SKILL.md`; `papers.py` deliberately interprets nothing.
 
 ---
 
@@ -285,6 +336,30 @@ Confidence and flag distributions are informational — a low-confidence note is
 
 ---
 
+## Running under WSL
+
+Everything here runs unmodified on WSL except `textspec.py`, which shells out to `pdftotext`, and
+Debian's apt poppler is not installed on the dev box. Rather than fork the script, `wsl/pdftotext`
+wraps Git for Windows' `pdftotext.exe` and hands it Windows paths for any argument that names an
+existing file (`wslpath -w` yields a `\\wsl.localhost\...` UNC path, which poppler opens fine):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pdfplumber pypdf click pymupdf
+install -m 755 wsl/pdftotext ~/.local/bin/pdftotext     # ~/.local/bin must be on PATH
+pdftotext -v                                            # poppler's banner via the .exe
+```
+
+Alternative tooling, and why it is not the default:
+
+| Instead of | Alternative | Status |
+|---|---|---|
+| `wsl/pdftotext` shim | `apt install poppler-utils` | needs root; works as-is if you have it, no shim required |
+| `wsl/pdftotext` shim | port `textspec.py` to pypdf layout mode | would change a measured 97 %-precision path; not done |
+| `parse.py` on a paper | `papers.py` | pdfplumber orders two-column text by y and interleaves the columns |
+
+The vault on WSL is `/mnt/<drive>/<vault>/AutoNotes`; `AUTONOTES_VAULT` accepts that path. Interop is slow on
+first call (~2 s to start the `.exe`) and the Windows binary cannot see files under `/tmp`.
+
 ## Gotchas worth knowing
 
 - **`rglob` is case-insensitive on Windows.** Globbing `*.pdf` *and* `*.PDF` and concatenating lists
@@ -317,6 +392,7 @@ parse.py            device info + elec chars + registers   (pdfplumber)
 textspec.py         parameters + topology claimed in prose (pdftotext)
 fuse.py             three-source voting, confidence, flags (imported)
 trm.py              page-indexed search for large TRMs     (pypdf)
+papers.py           column-aware text, ids, skeleton note for research papers (pymupdf)
 xlsx_to_csv.py      vendor .xlsx -> CSV, bypassing openpyxl
 
 twin_notes.py       stage 1 — generate/refresh twin notes
@@ -327,6 +403,12 @@ verify_twins.py     stage 4 — structural checks, non-zero exit on failure
 
 extractor/          device_info, elec_chars, i2c_registers, generic, textindex, output
 output/<stem>/      device_info.json, elec_chars.json, registers.json, textspec.json, text.txt
+batch.py            run the inbox: input/<type>/ -> that type's tool -> move original out
+input/<type>/       datasheets | papers | manuals | parametrics (contents gitignored, tree kept)
+processed/<type>/   where originals land when batch.py has no --dest (gitignored)
+wsl/pdftotext       shim around Git for Windows' pdftotext.exe, see "Running under WSL"
+.claude/skills/     datasheet-parser (which script answers which question, pin-table caveat)
+                    paper-importer  (papers -> one vault note each, folder index, synthesis)
 probe*.py           one-off exploration scripts; not part of any pipeline
 check*.py           ad-hoc verification scripts; superseded by verify_twins.py
 lr11xx_sensitivity.py, sx1276_sensitivity.py   part-specific sensitivity-table extractors

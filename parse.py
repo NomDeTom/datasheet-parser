@@ -24,7 +24,7 @@ _TI_DOC_RE = __import__("re").compile(r"^SL[A-Z]{2,}", __import__("re").IGNORECA
 
 @click.command()
 @click.argument("pdf_path", required=False)
-@click.option("--all", "parse_all", is_flag=True, help="Parse all PDFs in datasheets/")
+@click.option("--all", "parse_all", is_flag=True, help="Parse all PDFs in input/datasheets/")
 @click.option("--format", "fmt", default="json",
               type=click.Choice(["json", "csv"]), show_default=True)
 @click.option("--registers-only", is_flag=True, help="Skip electrical characteristics")
@@ -33,13 +33,13 @@ _TI_DOC_RE = __import__("re").compile(r"^SL[A-Z]{2,}", __import__("re").IGNORECA
 @click.option("--generic", "force_generic", is_flag=True,
               help="Force generic (non-TI) extractor for device info")
 def main(pdf_path, parse_all, fmt, registers_only, elec_only, debug, force_generic):
-    input_dir = Path("datasheets")
+    input_dir = Path("input") / "datasheets"
     output_dir = Path("output")
 
     if parse_all:
         pdfs = list(input_dir.glob("*.pdf"))
         if not pdfs:
-            click.echo("No PDFs found in datasheets/")
+            click.echo("No PDFs found in input/datasheets/")
             return
     elif pdf_path:
         pdfs = [Path(pdf_path)]

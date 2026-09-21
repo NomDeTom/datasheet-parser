@@ -1,3 +1,12 @@
+# The typed inbox: input/<type>/ holds files waiting to be processed, and batch.py
+# moves them out again when done. Contents stay local; the folders are the routing
+# table (.gitkeep), so they are kept.
+input/*/*
+!input/*/.gitkeep
+processed/
 output/*
-extractor/__pycache__/
+!output/.gitkeep
+
+.venv/
+__pycache__/
 *.pyc
