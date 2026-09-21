@@ -27,8 +27,8 @@ the scripts are unchanged, but `pdftotext` has to be borrowed from the Windows s
 1. `--vault /path/to/AutoNotes/Reference Material`
 2. the `AUTONOTES_VAULT` environment variable (`export` / `setx`)
 3. a `.autonotes-vault` file beside these scripts, holding the path on line 1
-4. conventional locations (`~/<vault>/AutoNotes/...`, `~/Documents/<vault>/...`, `~/Sync/<vault>/...`,
-   and `D:`/`C:`/`E:` drive roots on Windows)
+4. conventional locations, newest first: `~/<vault>/AutoNotes/...` and `<vault>\AutoNotes`, then
+   the pre-merge `<vault>\AutoNotes`, `~/<vault>/...`, `~/Documents/<vault>/...`, `~/Sync/<vault>/...`
 
 Any of the vault root, its parent, or `Reference Material` itself is accepted. A path that does not
 contain `Component Index.md` or an `attachments/` folder is rejected with a message rather than
@@ -357,7 +357,7 @@ Alternative tooling, and why it is not the default:
 | `wsl/pdftotext` shim | port `textspec.py` to pypdf layout mode | would change a measured 97 %-precision path; not done |
 | `parse.py` on a paper | `papers.py` | pdfplumber orders two-column text by y and interleaves the columns |
 
-The vault on WSL is `/mnt/<drive>/<vault>/AutoNotes`; `AUTONOTES_VAULT` accepts that path. Interop is slow on
+The vault on WSL is `~/<vault>/AutoNotes` (the Syncthing copy on the Linux filesystem, found without configuration); do not point `.autonotes-vault` at `/mnt/<drive>/<vault>`, which is the Windows copy over 9p and races Syncthing. Interop is slow on
 first call (~2 s to start the `.exe`) and the Windows binary cannot see files under `/tmp`.
 
 ## Gotchas worth knowing

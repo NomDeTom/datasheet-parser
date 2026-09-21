@@ -24,6 +24,12 @@ VAULT_LEAF = Path("AutoNotes") / "Reference Material"
 # Conventional spots to try, in order. Windows drive letters are only probed on Windows.
 def _candidates():
     home = Path.home()
+    # Where it lives since 2026-09-21: inside the <vault> vault (<vault> on Windows).
+    yield home / "<vault>" / VAULT_LEAF
+    if sys.platform == "win32":
+        for drive in ("D:", "C:", "E:"):
+            yield Path(drive + "\\") / "Notes" / VAULT_LEAF
+    # The pre-merge home, <vault>\AutoNotes, and the other places it has been looked for.
     if sys.platform == "win32":
         for drive in ("D:", "C:", "E:"):
             yield Path(drive + "\\") / "<vault>" / VAULT_LEAF
