@@ -1,7 +1,7 @@
 """
 vaultpath.py — locate the AutoNotes vault and required tools without hardcoding a platform.
 
-The pipeline scripts previously each carried `Path(r"<vault>\\AutoNotes\\Reference Material")`,
+The pipeline scripts previously each carried one machine's absolute vault path,
 which made them unusable anywhere else. Resolution order, first hit wins:
 
   1. an explicit `--vault` argument
@@ -21,24 +21,21 @@ CONFIG_FILE = Path(__file__).resolve().parent / ".autonotes-vault"
 ENV_VAR = "AUTONOTES_VAULT"
 VAULT_LEAF = Path("AutoNotes") / "Reference Material"
 
-# Conventional spots to try, in order. Windows drive letters are only probed on Windows.
+# Conventional spots to try, in order. Nothing here names a particular machine: the vault is
+# found as an `AutoNotes` folder directly under home, under Documents, one level down from
+# either (a notes tree that contains it), or one level under a drive root on Windows.
 def _candidates():
     home = Path.home()
-    # Where it lives since 2026-09-21: inside the <vault> vault (<vault> on Windows).
-    yield home / "<vault>" / VAULT_LEAF
+    roots = [home, home / "Documents"]
     if sys.platform == "win32":
-        for drive in ("D:", "C:", "E:"):
-            yield Path(drive + "\\") / "Notes" / VAULT_LEAF
-    # The pre-merge home, <vault>\AutoNotes, and the other places it has been looked for.
-    if sys.platform == "win32":
-        for drive in ("D:", "C:", "E:"):
-            yield Path(drive + "\\") / "<vault>" / VAULT_LEAF
-    yield home / "<vault>" / VAULT_LEAF
-    yield home / "Documents" / "<vault>" / VAULT_LEAF
-    yield home / VAULT_LEAF
-    # Syncthing / cloud-sync layouts people actually use
-    yield home / "Sync" / "<vault>" / VAULT_LEAF
-    yield home / "obsidian" / VAULT_LEAF
+        roots += [Path(d + "\\") for d in ("D:", "C:", "E:")]
+    for root in roots:
+        yield root / VAULT_LEAF
+    for root in roots:
+        if root.is_dir():
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and not child.name.startswith("."):
+                    yield child / VAULT_LEAF
 
 
 def _looks_like_vault(p: Path):
@@ -102,7 +99,7 @@ def find_vault(explicit=None, required=True):
         f"  --vault /path/to/AutoNotes/Reference Material\n"
         f"  export {ENV_VAR}=/path/to/AutoNotes        (setx on Windows)\n"
         f"  echo /path/to/AutoNotes > {CONFIG_FILE.name}\n"
-        "  or place the vault at ~/<vault>/AutoNotes/Reference Material"
+        "  or place the vault at ~/AutoNotes, ~/Documents/AutoNotes, or one folder below either"
     )
 
 

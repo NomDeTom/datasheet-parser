@@ -1,6 +1,6 @@
 ---
 name: datasheet-parser
-description: How to run the datasheet-parser scripts (<checkout>) to pull structured data — device info, register maps, electrical characteristics, pinouts — out of a PDF datasheet. Use whenever a task needs facts (pin functions, register addresses, elec specs) sourced from a datasheet PDF rather than guessed from memory.
+description: How to run the datasheet-parser scripts in this repo to pull structured data — device info, register maps, electrical characteristics, pinouts — out of a PDF datasheet. Use whenever a task needs facts (pin functions, register addresses, elec specs) sourced from a datasheet PDF rather than guessed from memory.
 ---
 
 # datasheet-parser

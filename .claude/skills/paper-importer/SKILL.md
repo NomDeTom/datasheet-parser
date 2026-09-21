@@ -20,7 +20,7 @@ folder belongs to. Follows the `vault-notes` conventions for placement and index
 | | |
 |---|---|
 | Interpreter | the repo `.venv` (see README "Setup"); `papers.py` additionally needs `pymupdf` |
-| Script | `papers.py` at the repo root (`~/datasheet-parser` on WSL, `<checkout>` on Windows) |
+| Script | `papers.py` at the repo root |
 | Inbox | `input/papers/` in the repo, when staged ahead; `batch.py --type papers --dest <vault folder>` runs steps 1–2 and moves the PDFs into the vault folder |
 | Papers | `<project>/YYYY-MM-DD-<topic>/*.pdf` — the vault folder the notes live in; PDFs already there are processed in place and not moved |
 | Text sidecars | `<same folder>/text/<stem>.txt` via `-o`; without `-o` the cache goes to `output/<stem>/text.txt` like `trm.py` |

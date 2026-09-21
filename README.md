@@ -1,7 +1,7 @@
 # Datasheet Parser
 
-Extracts structured data from PDF datasheets, and maintains the parameter layer of the AutoNotes
-vault at `<vault>\AutoNotes`.
+Extracts structured data from PDF datasheets, and maintains the parameter layer of an
+`AutoNotes` Obsidian vault (an `AutoNotes/Reference Material/` tree with a `Component Index.md`).
 
 Two halves that can be used independently:
 
@@ -27,8 +27,8 @@ the scripts are unchanged, but `pdftotext` has to be borrowed from the Windows s
 1. `--vault /path/to/AutoNotes/Reference Material`
 2. the `AUTONOTES_VAULT` environment variable (`export` / `setx`)
 3. a `.autonotes-vault` file beside these scripts, holding the path on line 1
-4. conventional locations, newest first: `~/<vault>/AutoNotes/...` and `<vault>\AutoNotes`, then
-   the pre-merge `<vault>\AutoNotes`, `~/<vault>/...`, `~/Documents/<vault>/...`, `~/Sync/<vault>/...`
+4. conventional locations: an `AutoNotes` folder directly under home or `Documents`, one level
+   below either (a notes tree that contains it), or one level under a drive root on Windows
 
 Any of the vault root, its parent, or `Reference Material` itself is accepted. A path that does not
 contain `Component Index.md` or an `attachments/` folder is rejected with a message rather than
@@ -69,7 +69,7 @@ input/parametrics/   -> xlsx_to_csv.py      vendor .xlsx -> output/<stem>.csv
 ```bash
 python batch.py --dry-run                                  # the plan, nothing runs
 python batch.py                                            # all types; originals -> processed/<type>/
-python batch.py --type papers --dest ~/<vault>/MeshBench/2026-09-20-research
+python batch.py --type papers --dest /path/to/vault/<project>/<dated-folder>
 ```
 
 When a file has been processed its original is **moved out**, so `input/` is clean again: to
@@ -357,7 +357,8 @@ Alternative tooling, and why it is not the default:
 | `wsl/pdftotext` shim | port `textspec.py` to pypdf layout mode | would change a measured 97 %-precision path; not done |
 | `parse.py` on a paper | `papers.py` | pdfplumber orders two-column text by y and interleaves the columns |
 
-The vault on WSL is `~/<vault>/AutoNotes` (the Syncthing copy on the Linux filesystem, found without configuration); do not point `.autonotes-vault` at `/mnt/<drive>/<vault>`, which is the Windows copy over 9p and races Syncthing. Interop is slow on
+If the vault is a Syncthing tree, point the scripts at the copy on the Linux filesystem, not at the
+same tree seen through `/mnt/<drive>`: 9p is slow and writing there races Syncthing. Interop is slow on
 first call (~2 s to start the `.exe`) and the Windows binary cannot see files under `/tmp`.
 
 ## Gotchas worth knowing
@@ -415,5 +416,5 @@ lr11xx_sensitivity.py, sx1276_sensitivity.py   part-specific sensitivity-table e
 ```
 
 The vault-side conventions these scripts follow are documented in
-`<vault>\AutoNotes\TASK - Datasheet Organisation.md`; the generated tables live in
+`AutoNotes/TASK - Datasheet Organisation.md` in the vault; the generated tables live in
 `Reference Material\Datasheet Parameter Tables.md` and `Reference Material\TI Parametrics\`.
