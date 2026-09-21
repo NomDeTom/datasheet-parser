@@ -10,3 +10,6 @@ output/*
 .venv/
 __pycache__/
 *.pyc
+
+# Machine-local vault location override (see vaultpath.py); the vault itself lives outside the repo.
+.autonotes-vault
