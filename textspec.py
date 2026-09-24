@@ -202,9 +202,15 @@ def extract(pdf: Path, pages=2):
         if not vaultpath.have_tool("pdftotext"):
             vaultpath.require_tool("pdftotext", "reading datasheet prose")
         return {"_error": f"pdftotext failed: {exc}", "_claims": []}
+    return scan(columns(raw), has_register_map(pdf))
 
+
+def scan(streams, register_map=False):
+    """The prose reading, independent of which extractor supplied the text: a list of streams
+    (column texts from pdftotext, or Docling's paragraphs and bullets) -> the same result as
+    extract(). Shared so the two sources are compared, and later swapped, on equal terms."""
     claims, best, all_fragments = [], {}, []
-    for stream in columns(raw):
+    for stream in streams:
         # Work sentence-ish: split on sentence ends and bullet markers to bound each match.
         #
         # TI's bullet is a Symbol-font glyph that pdftotext emits as bytes which are not valid
@@ -237,7 +243,7 @@ def extract(pdf: Path, pages=2):
     best["_claims"] = claims
     best["_topology"] = derived
     best["_topology_terms"] = terms
-    best["_has_register_map"] = has_register_map(pdf)
+    best["_has_register_map"] = register_map
     return best
 
 

@@ -1,37 +1,29 @@
 #!/usr/bin/env python
 """Research papers: inventory, page-marked text cache, outline, skeleton note, page render.
 
-    papers.py inventory [DIR|PDF...]        one block per PDF: pages, text layer, DOI/arXiv, title
-    papers.py extract   [DIR|PDF...] [-o DIR]  column-aware full text; default output/<stem>/text.txt
+    papers.py inventory [DIR|PDF...]        one block per PDF: pages, backend, DOI/arXiv, title
+    papers.py extract   [DIR|PDF...] [-o DIR]  full text; default output/<stem>/text.txt
                                             (no paths = everything in input/papers/)
-    papers.py outline   PDF                 numbered section headings with page numbers
-    papers.py skeleton  PDF [-o note.md]    note header + abstract, ready for the reading pass
-    papers.py render    PDF PAGE [-o png]   rasterise one page (figures, scanned pages)
+    papers.py outline   PDF                 section headings with page numbers
+    papers.py skeleton  PDF [-o note.md]    note header + abstract + outline, ready for the reading pass
+    papers.py render    PDF PAGE [-o png]   rasterise one page (equations, figures, scans)
 
 The sibling of trm.py for two-column journal PDFs. It writes the same `=== PAGE n ===` markers
 to the same cache path, so `trm.py find <pdf> PATTERN` works on a paper once it is extracted.
-Backend is pymupdf (fast, column geometry available); pdfplumber is not used here. Nothing in
-this file interprets the paper - that is the reading pass described in .claude/skills/paper-importer.
+
+Reading is extractor/paper_source.py: Docling when docling_extract.py has converted the paper
+(layout-model reading order, labelled title, headings with pages), otherwise pypdfium2 reading
+each page's left half then right half. Rendering is pypdfium2. In the vault, a paper's full text
+and its metadata (document.paper in .data.json) are written by sidecars.py from the same reader.
+Nothing in this file interprets the paper — that is the reading pass described in
+.claude/skills/paper-importer.
 """
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
 
-try:
-    import pymupdf
-except ImportError:  # the fitz name on older wheels
-    import fitz as pymupdf
-
-DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>|]+?)(?=[\s\"<>|,;)]|$)")
-ARXIV_RE = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5}(?:v\d+)?)")
-# Section headings as IEEE/Springer set them: "I. INTRODUCTION", "2 Related work", "A. Capture effect"
-HEADING_RE = re.compile(
-    r"^\s*(?:(?P<roman>[IVX]{1,5})\.|(?P<num>\d{1,2}(?:\.\d{1,2}){0,2})\.?|(?P<alpha>[A-H])\.)\s+"
-    r"(?P<title>[A-Z][^\n]{2,80}?)\s*$"
-)
-STOP_HEADINGS = {"references", "acknowledgment", "acknowledgments", "acknowledgement", "acknowledgements"}
+from extractor import paper_source as ps
 
 
 def pdfs(paths):
@@ -43,128 +35,42 @@ def pdfs(paths):
             yield p
 
 
-def page_text(page):
-    """Column-aware reading order: blocks whose centre sits left of the page midline come first.
-
-    Two-column journal layouts interleave if sorted purely by y. Full-width blocks (title,
-    abstract on some templates, wide tables) are emitted with the left column at their y.
-    """
-    mid = page.rect.width / 2
-    blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
-    left, right = [], []
-    for x0, y0, x1, y1, text, *_ in blocks:
-        wide = (x1 - x0) > 0.6 * page.rect.width
-        ((left if (wide or (x0 + x1) / 2 < mid) else right)).append((y0, text))
-    order = sorted(left) + sorted(right)
-    t = "\n".join(text for _, text in order)
-    t = t.replace("\u00ad", "")
-    t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)  # "inter-\nference" -> "interference"
-    t = re.sub(r"[ \t]+\n", "\n", t)
-    return t
-
-
-PAGE_MARKER = "=== PAGE %d ==="  # trm.py's convention, so its `find` works on a paper cache
-
-
-def full_text(doc):
-    return "".join(f"\n{PAGE_MARKER % (i + 1)}\n{page_text(p)}" for i, p in enumerate(doc))
-
-
-def ids(text):
-    doi = DOI_RE.search(text)
-    arx = ARXIV_RE.search(text)
-    return (doi.group(1).rstrip(".") if doi else None, arx.group(1) if arx else None)
-
-
-def guess_title(doc):
-    """Metadata title if it looks like one, else the largest-font run on page 1."""
-    meta = (doc.metadata.get("title") or "").strip()
-    if meta and not meta.lower().endswith(".pdf") and len(meta) > 12 and " " in meta:
-        return meta
-    spans = []
-    for b in doc[0].get_text("dict")["blocks"]:
-        for l in b.get("lines", []):
-            for s in l["spans"]:
-                if s["text"].strip():
-                    spans.append((round(s["size"], 1), s["text"].strip()))
-    if not spans:
-        return None
-    big = max(sz for sz, _ in spans)
-    return " ".join(t for sz, t in spans if sz == big)
-
-
-def year_of(doc, text):
-    m = re.search(r"D:(\d{4})", doc.metadata.get("creationDate") or "")
-    if m:
-        return m.group(1)
-    m = re.search(r"\b(19|20)\d{2}\b", text[:3000])
-    return m.group(0) if m else None
-
-
-def abstract_of(text):
-    m = re.search(r"Abstract\s*[—\-–:.]?\s*(.+?)(?=\n\s*(?:Index Terms|Keywords|I\.\s+INTRODUCTION|1\s+Introduction|1\.\s+Introduction))",
-                  text, re.S | re.I)
-    if not m:
-        return None
-    return re.sub(r"\s*\n\s*", " ", m.group(1)).strip()
-
-
-def outline(doc):
-    out, seen = [], set()
-    for i, p in enumerate(doc):
-        for line in page_text(p).splitlines():
-            m = HEADING_RE.match(line)
-            if not m:
-                continue
-            title = m.group("title").strip()
-            if title.lower() in seen or len(title.split()) > 12:
-                continue
-            seen.add(title.lower())
-            label = m.group("roman") or m.group("num") or m.group("alpha")
-            out.append((i + 1, label, title))
-            if title.lower() in STOP_HEADINGS:
-                return out
-    return out
-
-
 def cmd_inventory(a):
     for p in pdfs(a.paths):
-        doc = pymupdf.open(p)
-        text = full_text(doc)
-        doi, arx = ids(text)
-        layer = "text" if len(text) / max(len(doc), 1) > 200 else "SCANNED"
-        print(f"{p.name}\n  pages={len(doc)} {layer} year={year_of(doc, text)} doi={doi} arxiv={arx}\n  title={guess_title(doc)}")
+        paper = ps.read(p)
+        doi, arx = ps.ids(paper)
+        layer = "text" if len(paper.text) / max(len(paper.pages), 1) > 200 else "SCANNED"
+        print(f"{p.name}\n  pages={len(paper.pages)} {layer} read-by={paper.backend} "
+              f"year={ps.year(paper)} doi={doi} arxiv={arx}\n  title={ps.title(paper)}")
 
 
 def cmd_extract(a):
     outdir = Path(a.out) if a.out else None
     for p in pdfs(a.paths):
-        doc = pymupdf.open(p)
-        # -o DIR puts <stem>.txt beside notes in a vault; the default matches trm.py's cache.
+        paper = ps.read(p)
+        # -o DIR puts <stem>.txt beside notes; the default matches trm.py's cache.
         target = (outdir / (p.stem + ".txt")) if outdir else Path("output") / p.stem / "text.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(full_text(doc), encoding="utf-8")
-        print(f"{target}  ({len(doc)} pages)")
+        target.write_text(paper.text, encoding="utf-8")
+        print(f"{target}  ({len(paper.pages)} pages, {paper.backend})")
 
 
 def cmd_outline(a):
-    doc = pymupdf.open(a.pdf)
-    for page, label, title in outline(doc):
-        indent = "  " if re.fullmatch(r"[A-H]|\d+\.\d+(\.\d+)?", label) else ""
-        print(f"{indent}{label:>4}  {title}  (p{page})")
+    for page, label, title in ps.outline(ps.read(a.pdf)):
+        indent = "  " if re.fullmatch(r"[A-H]|\d+\.\d+(\.\d+)?", label or "") else ""
+        print(f"{indent}{label or '':>4}  {title}  (p{page})")
 
 
 def cmd_skeleton(a):
-    doc = pymupdf.open(a.pdf)
-    text = full_text(doc)
-    doi, arx = ids(text)
-    src = f"doi:{doi}" if doi else (f"arXiv:{arx}" if arx else "—")
+    paper = ps.read(a.pdf)
+    md = ps.metadata(paper)
+    src = f"doi:{md['doi']}" if md["doi"] else (f"arXiv:{md['arxiv']}" if md["arxiv"] else "—")
     lines = [
-        f"# {guess_title(doc) or Path(a.pdf).stem}",
+        f"# {md['title'] or Path(a.pdf).stem}",
         "",
-        f"**Authors:** —",
-        f"**Venue:** {doc.metadata.get('subject') or '—'} ({year_of(doc, text) or '—'})",
-        f"**Source:** {src} · [[{Path(a.pdf).stem}]] ({len(doc)} pp)",
+        f"**Authors:** {md['authors'] or '—'}",
+        f"**Venue:** {md['venue'] or '—'} ({md['year'] or '—'})",
+        f"**Source:** {src} · [[{Path(a.pdf).name}]] ({len(paper.pages)} pp)",
         "**Read on:** —",
         "**Relevance:** —",
         "",
@@ -172,7 +78,7 @@ def cmd_skeleton(a):
         "",
         "## Abstract (as published)",
         "",
-        abstract_of(text) or "—",
+        md["abstract"] or "—",
         "",
         "## What it claims",
         "",
@@ -181,8 +87,8 @@ def cmd_skeleton(a):
         "## Outline",
         "",
     ]
-    for page, label, title in outline(doc):
-        lines.append(f"- {label}. {title} (p{page})")
+    lines += [f"- {o['label'] + '. ' if o['label'] else ''}{o['title']} (p{o['page']})"
+              for o in md["outline"]]
     body = "\n".join(lines) + "\n"
     if a.out:
         Path(a.out).write_text(body, encoding="utf-8")
@@ -192,10 +98,11 @@ def cmd_skeleton(a):
 
 
 def cmd_render(a):
-    doc = pymupdf.open(a.pdf)
-    pix = doc[a.page - 1].get_pixmap(dpi=a.dpi)
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(a.pdf))
+    image = doc[a.page - 1].render(scale=a.dpi / 72).to_pil()
     out = a.out or f"{Path(a.pdf).stem}-p{a.page}.png"
-    pix.save(out)
+    image.save(out)
     print(out)
 
 

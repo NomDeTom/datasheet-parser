@@ -1,0 +1,10 @@
+[Unit]
+Description=AutoNotes: safety-net pass over the import folder (missed events, files present at boot)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30min
+Unit=autonotes-ingest.service
+
+[Install]
+WantedBy=timers.target

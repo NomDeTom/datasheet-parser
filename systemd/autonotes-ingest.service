@@ -1,0 +1,15 @@
+[Unit]
+Description=AutoNotes: file and extract PDFs dropped into the import folder
+Documentation=file://@PARSER_DIR@/ingest.py
+
+[Service]
+Type=oneshot
+# user managers start with a minimal PATH; tools such as pdftotext often live in ~/.local/bin
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=%h/.config/autonotes/ingest.env
+WorkingDirectory=@PARSER_DIR@
+ExecStart=@PARSER_DIR@/.venv/bin/python @PARSER_DIR@/ingest.py
+Nice=10
+IOSchedulingClass=idle
+# Docling on a long datasheet takes minutes; a whole batch can take hours
+TimeoutStartSec=8h

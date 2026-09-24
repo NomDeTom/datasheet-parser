@@ -1,0 +1,9 @@
+[Unit]
+Description=AutoNotes: watch the import folder
+
+[Path]
+PathChanged=@INBOX@
+Unit=autonotes-ingest.service
+
+[Install]
+WantedBy=default.target

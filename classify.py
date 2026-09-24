@@ -16,7 +16,7 @@ Signals are combined in descending order of trust, and `classified_by` records w
 Folder beats keywords because the folder is a human decision; TI's category beats folder because it
 distinguishes a charger from a converter inside Power/, which the folder cannot.
 
-Run last: it reads `ti_category` and `topology`, which `enrich_ti.py` adds.
+Run last: it reads `ti_category` and `topology`, which TI enrichment adds (enrichment.py).
 
 Usage:
     python classify.py                # classify every twin note
@@ -458,3 +458,30 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── record interface (the Library layout: one .data.json per document) ─────────
+def classify_record(stem, original_name, category, fields, curated):
+    """Run the same decisions as main() on a document record instead of a twin note.
+
+    `fields` carries what the twin frontmatter used to (ti_category, ti_subcategory, ti_function,
+    topology, text_topology, title, ti_description, doc_id, part, source_pdf, vin_min, vout_max).
+    The card's `category` ("Power", "RF/LoRa") stands in for the folder the twin sat in, and the
+    original download name stands in for the file stem, so the LCSC vendor segment still counts.
+    Returns the same fields main() writes.
+    """
+    import json as _json
+    front = "\n".join(f"{k}: {_json.dumps(v) if isinstance(v, str) else v}"
+                      for k, v in fields.items() if v not in (None, ""))
+    folder = [p for p in (category or "").split("/") if p]
+    note = Path(*folder, "attachments", f"{stem}{SUFFIX}.md")
+    product_type, decided_by = classify(note, front, curated)
+    mfr, mfr_by = manufacturer(Path(f"{Path(original_name or stem).stem}{SUFFIX}.md"), front)
+    curated_hit = ((curated or {}).get(str(fields.get("source_pdf") or "").lower())
+                   or (curated or {}).get(stem.lower()) or ("", ""))
+    topo, topo_by = topology_class(front, curated_hit[1])
+    return {"product_type": product_type, "classified_by": decided_by,
+            "manufacturer": mfr or None, "manufacturer_by": mfr_by,
+            "topology_class": topo or None, "topology_by": topo_by,
+            "steps_down": steps_down(front),
+            "converts_voltage": product_type in CONVERTS}

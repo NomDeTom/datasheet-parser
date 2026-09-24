@@ -1,0 +1,38 @@
+# Cards whose extraction a person should check: weak confidence, anomaly flags, or nothing typed.
+filters:
+  and:
+    - file.hasProperty("doc_type")
+    - doc_type == "datasheet"
+views:
+  - type: table
+    name: Low or no confidence
+    filters:
+      or:
+        - confidence == "low"
+        - confidence == "none"
+    order:
+      - file.name
+      - category
+      - confidence
+      - flags
+      - spec_rows
+  - type: table
+    name: Flagged
+    filters:
+      and:
+        - flags.length > 0
+    order:
+      - file.name
+      - flags
+      - confidence
+  - type: table
+    name: Verified by hand
+    filters:
+      and:
+        - verified == true
+    order:
+      - file.name
+      - vin_min
+      - vin_max
+      - vout_min
+      - vout_max

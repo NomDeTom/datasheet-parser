@@ -1,0 +1,18 @@
+# Semtech LoRa radios and their documents. Embed in a summary page with ![[LoRa.base]].
+filters:
+  and:
+    - file.hasProperty("doc_type")
+    - category.contains("LoRa")
+views:
+  - type: table
+    name: LoRa documents
+    groupBy:
+      property: doc_type
+      direction: ASC
+    order:
+      - file.name
+      - part
+      - revision
+      - pages
+      - spec_rows
+      - registers

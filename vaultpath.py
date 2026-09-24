@@ -38,6 +38,16 @@ def _candidates():
                     yield child / VAULT_LEAF
 
 
+def _is_library_root(p: Path):
+    """The one-folder-per-document layout: AutoNotes/ holding Library/."""
+    return p.is_dir() and (p / "Library").is_dir()
+
+
+def root_of(vault: Path) -> Path:
+    """The AutoNotes/ folder, whichever layout `vault` came from."""
+    return vault if _is_library_root(vault) else vault.parent
+
+
 def _looks_like_vault(p: Path):
     """Cheap shape check so a wrong path fails loudly instead of producing an empty run."""
     if not p.is_dir():
@@ -52,6 +62,9 @@ def _resolve_root(p: Path):
     Deepest candidate first: given `<...>/AutoNotes`, the answer is its `Reference Material`
     subfolder, not the folder itself — checking the bare path first returned the wrong level.
     """
+    for cand in (p / "AutoNotes", p):
+        if _is_library_root(cand):
+            return cand.resolve()
     for cand in (p / VAULT_LEAF, p / "Reference Material", p):
         if _looks_like_vault(cand):
             return cand.resolve()
@@ -59,7 +72,10 @@ def _resolve_root(p: Path):
 
 
 def find_vault(explicit=None, required=True):
-    """-> Path to '<...>/AutoNotes/Reference Material'."""
+    """-> '<...>/AutoNotes' (Library layout) or '<...>/AutoNotes/Reference Material' (legacy).
+
+    Use root_of() for the AutoNotes/ folder regardless of layout.
+    """
     if explicit:
         p = Path(explicit).expanduser()
         found = _resolve_root(p)
@@ -89,6 +105,8 @@ def find_vault(explicit=None, required=True):
                          "which does not look like the vault")
 
     for cand in _candidates():
+        if _is_library_root(cand.parent.parent):
+            return cand.parent.parent.resolve()
         if _looks_like_vault(cand):
             return cand.resolve()
 

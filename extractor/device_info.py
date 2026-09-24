@@ -281,8 +281,17 @@ class DeviceInfoExtractor:
             pages_text = []
             for i in range(min(3, len(pdf.pages))):
                 pages_text.append(pdf.pages[i].extract_text() or "")
+            p1_tables = pdf.pages[0].extract_tables()
+        return device_info_from(pages_text, p1_tables, self.debug)
 
-            p1_text  = pages_text[0]
+
+def device_info_from(pages_text: list, p1_tables: list, debug: bool = False) -> DeviceInfo:
+    """The page-1 reading, independent of which extractor supplied the text and tables — so the
+    pdfplumber path (DeviceInfoExtractor) and the Docling path (docling_device_info.py) apply
+    exactly the same rules and can be compared on equal terms."""
+    if True:
+        if True:
+            p1_text  = pages_text[0] if pages_text else ""
             all_text = "\n".join(pages_text)
 
             # ── Identity ──────────────────────────────────────────────────────
@@ -317,7 +326,6 @@ class DeviceInfoExtractor:
 
             # ── Package table ─────────────────────────────────────────────────
             packages: list[PackageVariant] = []
-            p1_tables = pdf.pages[0].extract_tables()
             for tbl in p1_tables:
                 if not tbl or not _is_pkg_table(tbl[0]):
                     continue
@@ -392,7 +400,7 @@ class DeviceInfoExtractor:
                     if v and k not in spec_vals:
                         spec_vals[k] = v
 
-            if self.debug:
+            if debug:
                 print(f"  part={part_number!r} doc={doc_id!r}")
                 print(f"  packages: {packages}")
                 print(f"  spec_vals: {spec_vals}")

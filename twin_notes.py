@@ -358,6 +358,12 @@ def main():
     ap.add_argument("--from-cache", action="store_true",
                     help="re-render notes from output/<stem>/*.json without re-parsing the PDFs "
                          "(seconds instead of hours; implies --force)")
+    ap.add_argument("--max-pages", type=int, default=0,
+                    help="with --cache-only: skip PDFs longer than this (reference manuals; "
+                         "pdfplumber takes longer than --timeout on them and yields nothing useful)")
+    ap.add_argument("--cache-only", action="store_true",
+                    help="parse into output/<stem>/ and write nothing to the vault "
+                         "(for pipelines that render their own sidecars)")
     args = ap.parse_args()
     args.vault = vaultpath.find_vault(args.vault)
     vaultpath.require_tool('pdftotext', 'textspec.py prose extraction')
@@ -376,6 +382,25 @@ def main():
 
     for i, pdf in enumerate(pdfs, 1):
         note = pdf.with_name(pdf.stem + SUFFIX + ".md")
+        if args.cache_only:
+            if (PARSER_DIR / "output" / pdf.stem / "device_info.json").exists() and not args.force:
+                skipped += 1
+                continue
+            if pdf.stat().st_size / 1e6 > args.max_mb:
+                stubbed += 1
+                continue
+            if args.max_pages:
+                from pypdf import PdfReader
+                if len(PdfReader(str(pdf)).pages) > args.max_pages:
+                    stubbed += 1
+                    print(f"[{i}/{len(pdfs)}] skip  {pdf.name}: over --max-pages", flush=True)
+                    continue
+            info, registers, elec, err, text = run_parser(pdf, args.timeout)
+            failed += bool(err)
+            made += not err
+            print(f"[{i}/{len(pdfs)}] {'FAIL' if err else 'ok  '}  {pdf.name}"
+                  + (f": {err}" if err else ""), flush=True)
+            continue
         if note.exists() and not args.force:
             skipped += 1
             continue
@@ -420,12 +445,9 @@ def main():
 
     if args.force or args.from_cache:
         # Regenerating rewrites the frontmatter from the parse, which discards whatever
-        # enrich_ti.py and classify.py had added. Easy to forget, and the symptom is a silently
-        # un-enriched vault.
-        print("NOTE: regenerated notes have lost their enrichment/classification. Re-run:\n"
-              "        python enrich_ti.py --csv-dir <dir>\n"
-              "        python classify.py\n"
-              "        python verify_twins.py", flush=True)
+        # classify.py had added. Easy to forget, and the symptom is a silently unclassified vault.
+        print("NOTE: regenerated notes have lost their classification. Re-run:\n"
+              "        python classify.py", flush=True)
 
 
 if __name__ == "__main__":

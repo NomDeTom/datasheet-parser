@@ -1,0 +1,22 @@
+# Converters, chargers and regulators with their fused key parameters.
+filters:
+  and:
+    - file.hasProperty("doc_type")
+    - category.contains("Power")
+views:
+  - type: table
+    name: Power parts
+    order:
+      - file.name
+      - product_type
+      - topology
+      - vin_min
+      - vin_max
+      - vout_min
+      - vout_max
+      - iout_max
+      - fsw_max_khz
+      - confidence
+    sort:
+      - property: vin_max
+        direction: DESC

@@ -1,0 +1,12 @@
+[Unit]
+Description=AutoNotes: deferred Docling extraction and a full library check
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=%h/.config/autonotes/ingest.env
+WorkingDirectory=@PARSER_DIR@
+ExecStart=@PARSER_DIR@/.venv/bin/python @PARSER_DIR@/ingest.py --nightly
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=12h

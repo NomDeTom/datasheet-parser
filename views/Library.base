@@ -1,0 +1,39 @@
+# Every document card. Cards are the notes that carry a doc_type property (written by cards.py).
+filters:
+  and:
+    - file.hasProperty("doc_type")
+views:
+  - type: table
+    name: All documents
+    order:
+      - file.name
+      - part
+      - manufacturer
+      - category
+      - doc_type
+      - confidence
+      - vin_min
+      - vin_max
+      - vout_max
+      - iout_max
+      - spec_rows
+      - registers
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: table
+    name: Datasheets by category
+    filters:
+      and:
+        - doc_type == "datasheet"
+    groupBy:
+      property: category
+      direction: ASC
+    order:
+      - file.name
+      - part
+      - manufacturer
+      - confidence
+      - vin_min
+      - vin_max
+      - iout_max

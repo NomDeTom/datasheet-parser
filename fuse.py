@@ -171,6 +171,10 @@ def fuse_triple(page1, roc, prose):
     Measured precision on a hand-verified set: prose 97%, ROC better than page-1, page-1 worst.
     So the tie-break order is prose -> ROC -> page-1, but agreement between any two outranks a
     single source's opinion.
+
+    The three are independent *sources* — different statements in the document. Two extractors
+    reading the same ROC table are one source read twice, not two votes; fuse() merges those
+    before calling this.
     """
     present = [(name, pair) for name, pair in
                (("prose", prose), ("roc", roc), ("page1", page1))
@@ -205,7 +209,7 @@ def fuse_triple(page1, roc, prose):
     return pair[0], pair[1], "low", f"{name}={fmt(pair[0])}–{fmt(pair[1])} vs {others}"
 
 
-def fuse(info, elec, text=None):
+def fuse(info, elec, text=None, docling_elec=None):
     """Fuse device_info + elec_chars (+ optional textspec claims) into one estimate.
 
     With the third source present the sources vote: any two agreeing beats a lone dissenter, which
@@ -219,7 +223,20 @@ def fuse(info, elec, text=None):
         "iout": (None,                                 value_of(info.get("iout_max"), "A")),
         "fsw":  (value_of(info.get("freq_min"), "kHz"), value_of(info.get("freq_max"), "kHz")),
     }
-    r = {k: roc_range(elec, k) for k in _ROW_PATTERNS}
+    r_plumber = {k: roc_range(elec, k) for k in _ROW_PATTERNS}
+    # Docling reading the same ROC table is a second *reader* of one source, not a second source.
+    # Docling's reading is preferred (pdfplumber shifts TYP into MIN on TI tables, checked
+    # 2026-09-24); pdfplumber's fills in where Docling has none, and a disagreement between the
+    # two readers is flagged (the reading is in doubt) rather than counted as a dissenting vote.
+    r_docling = ({k: roc_range(docling_elec, k) for k in _ROW_PATTERNS} if docling_elec
+                 else {k: (None, None) for k in _ROW_PATTERNS})
+    r, reader_flags = {}, []
+    for k in _ROW_PATTERNS:
+        a, b = r_plumber[k], r_docling[k]
+        has_a, has_b = any(v is not None for v in a), any(v is not None for v in b)
+        r[k] = b if has_b else a            # Docling first; pdfplumber where Docling has nothing
+        if has_a and has_b and not _pair_agrees(a, b):
+            reader_flags.append(f"{k}_roc_readers_disagree")
 
     # Third view: claims made in the datasheet's own prose (see textspec.py).
     t = {}
@@ -235,12 +252,17 @@ def fuse(info, elec, text=None):
     values, confidence, disagreements = {}, {}, {}
     for key in ("vin", "vout", "iout", "fsw"):
         lo, hi, conf, clash = fuse_triple(p[key], r[key], t.get(key, (None, None)))
+        # Readers disagreeing matters only when the value rests on that table alone; if another
+        # source corroborates it (conf high), the doubt about the reading is already answered.
+        if f"{key}_roc_readers_disagree" in reader_flags and conf == "medium" \
+                and _pair_agrees((lo, hi), r[key]):
+            conf = "low"
         values[key] = (lo, hi)
         confidence[key] = conf
         if clash:
             disagreements[key] = clash
 
-    flags = []
+    flags = list(reader_flags)
     vin_lo, vin_hi = values["vin"]
     vout_lo, vout_hi = values["vout"]
 
@@ -266,10 +288,12 @@ def fuse(info, elec, text=None):
         flags.append("vin_min_zero_suspect")
         confidence["vin"] = "low"
 
-    for key in ("vin", "vout"):
+    for key in ("vin", "vout", "iout", "fsw"):
         lo, hi = values[key]
         # lo == hi is legitimate: fixed-output parts (TPS61097A-33 is 3.3V only, TPS63805 5V only)
-        # report an identical min and max. Only lo > hi is impossible.
+        # report an identical min and max. Only lo > hi is impossible — and it is usually not a
+        # range at all but per-variant values in one cell (Ag9200 "Output Current 3.03 2.6 A A"
+        # for Ag9203 / Ag9205), which pdfplumber reads as min and max.
         if lo is not None and hi is not None and lo > hi:
             flags.append(f"{key}_range_inverted")
             values[key] = (None, None)
@@ -282,5 +306,8 @@ def fuse(info, elec, text=None):
     if confidence["vout"] == "none" or flags:
         overall = "low" if overall != "none" else "none"
 
-    return {"values": values, "confidence": confidence,
-            "disagreements": disagreements, "flags": flags, "overall": overall}
+    # Every source's own reading, so callers can store evidence rather than only the verdict.
+    readings = {k: {"page1": p[k], "roc_pdfplumber": r_plumber[k], "roc_docling": r_docling[k],
+                    "prose": t.get(k, (None, None))} for k in _ROW_PATTERNS}
+    return {"values": values, "confidence": confidence, "disagreements": disagreements,
+            "flags": flags, "overall": overall, "readings": readings}
