@@ -70,7 +70,10 @@ def main():
     print("REGISTERS")
     tot = Counter()
     for pdf, data, cache in docs:
-        pl = data.get("registers") or []
+        # pdfplumber's own output, not .data.json: once Docling is the reader, the data file holds
+        # Docling's registers and the comparison would be Docling against itself
+        pcache = OUT / pdf.stem / "registers.json"
+        pl = json.loads(pcache.read_text(encoding="utf-8")) if pcache.exists() else []
         if not pl or not cache:
             continue
         dl = docling_registers.as_dicts(docling_registers.extract(cache))
