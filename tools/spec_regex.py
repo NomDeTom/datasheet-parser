@@ -1,6 +1,9 @@
 """Debug: run each spec pattern against a PDF's corpus and show what matches."""
 import sys, re
+from pathlib import Path
 import pdfplumber
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root, for extractor/
 from extractor.device_info import _SPEC_RES, _parse_bullets, _norm_val
 
 pdf_path = sys.argv[1]
