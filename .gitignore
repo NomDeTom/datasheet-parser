@@ -1,6 +1,5 @@
-# The typed inbox: input/<type>/ holds files waiting to be processed, and batch.py
-# moves them out again when done. Contents stay local; the folders are the routing
-# table (.gitkeep), so they are kept.
+# Local staging folders (input/datasheets/ is parse.py --all's default). Contents stay
+# local; the folders themselves are kept (.gitkeep).
 input/*/*
 !input/*/.gitkeep
 processed/

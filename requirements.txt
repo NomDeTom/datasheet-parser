@@ -1,8 +1,4 @@
-pdfplumber>=0.10.0
-pdfminer.six>=20221105
+# The pipeline's own venv. Docling goes in a separate venv — see README "Install".
+pdfplumber>=0.10.0      # brings pdfminer.six and pypdfium2
 pypdf>=4.0.0
-camelot-py[cv]>=0.11.0
-opencv-python>=4.8.0
-pandas>=2.0.0
-rich>=13.0.0
 click>=8.1.0

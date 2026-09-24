@@ -19,9 +19,8 @@ python -m pip install pdfplumber pypdf click
 Confirm with `which pdftotext`. No `AUTONOTES_VAULT` setup is needed for plain extraction —
 that's only for the vault-note pipeline (stage 2+ of the README).
 
-Drop the target PDF into `input/datasheets/` (or `input/manuals/` for a TRM) — or point a script
-at any path directly. `python batch.py` runs whatever is in `input/` with the right tool per
-subfolder and moves the originals out to `--dest` or `processed/<type>/`; see README "The inbox".
+Point a script at the PDF's path directly, or drop it into `input/datasheets/` and run
+`python parse.py --all`.
 
 ## Which script for which question
 
