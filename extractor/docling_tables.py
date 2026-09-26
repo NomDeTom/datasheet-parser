@@ -70,6 +70,7 @@ def norm(s: str) -> str:
 
 def to_number(tok: str):
     t = (tok or "").strip().replace("−", "-").replace("–", "-").replace(",", "")
+    t = re.sub(r"^([-+])\s+(?=[\d.])", r"\1", t)   # '– 0.3' (pypdfium2 backend)
     if t.lower() in _EMPTY:
         return None
     return float(t) if _NUM.match(t) else None
@@ -137,8 +138,24 @@ def _header(grid):
             # stacked headers: absorb following rows flagged column_header
             while last + 1 < len(grid) and any(c.get("column_header") for c in grid[last + 1]):
                 last += 1
+            if 0 not in fields and fields.get(1) == "parameter" and "symbol" not in seen \
+                    and _looks_like_symbols(grid[last + 1:]):
+                # PARAMETER centred over two columns lands in the second cell only (pypdfium2
+                # backend, fast table mode): the unlabelled first column is the symbol
+                fields[0] = "symbol"
             return last, fields
     return -1, {}
+
+
+def _looks_like_symbols(body):
+    col = [" ".join((r[0].get("text") or "").split()) for r in body if r]
+    col = [c for c in col if c]
+    return bool(col) and sum(len(c) <= 14 for c in col) >= len(col) / 2
+
+
+def _symbol(txt):
+    """'I Q(VIN)' -> 'IQ(VIN)': the pypdfium2 backend puts a space before a subscript."""
+    return re.sub(r"^([A-Za-zΔθτηψα])\s+(?=[A-Za-z0-9(])", r"\1", txt)
 
 
 def _cells(row, fields):
@@ -146,6 +163,8 @@ def _cells(row, fields):
     for j, cell in enumerate(row):
         f = fields.get(j)
         txt = fix_symbol_pua(" ".join((cell.get("text") or "").split()))
+        if f == "symbol":
+            txt = _symbol(txt)
         if f and txt and f not in rec:
             rec[f] = txt
     # text in unmapped leading columns is part of the parameter description
@@ -184,7 +203,7 @@ def type_rows(table, section, page):
     h, fields = _header(grid)
     if h < 0:
         return []
-    rows, group = [], ""
+    recs, group = [], ""
     for row in grid[h + 1:]:
         rec = _cells(row, fields)
         if not any(rec.get(v) for v in VALUES):
@@ -192,11 +211,16 @@ def type_rows(table, section, page):
             if label and not rec.get("unit"):
                 group = label                 # sub-heading row, e.g. "QUIESCENT CURRENTS"
             continue
+        recs.append((rec, group, []))
+    _join_fragments(recs)
+    _label_orphans(recs)
+    rows = []
+    for rec, group, extra in recs:
         if not (rec.get("symbol") or rec.get("parameter")):
             continue
         parts, was_split = _split(rec)
         for r in parts:
-            flags = ["split_from_merged_row"] if was_split else []
+            flags = (["split_from_merged_row"] if was_split else []) + extra
             nums = {v: to_number(r.get(v)) for v in VALUES}
             unparsed = [v for v in VALUES
                         if r.get(v) and r[v].lower() not in _EMPTY and nums[v] is None]
@@ -210,10 +234,64 @@ def type_rows(table, section, page):
                 "unit": norm_unit(r.get("unit", "")),
                 "raw": {v: r.get(v, "") for v in VALUES} if unparsed else None,
                 "extractor": "docling",
-                "confidence": "low" if flags else "medium",
+                "confidence": "low" if set(flags) - {"symbol_joined"} else "medium",
                 "flags": flags,
             })
     return rows
+
+
+def _join_fragments(recs):
+    """A symbol split across two rows — 'V' then 'UVLO' (pypdfium2 backend, subscript on its
+    own line) — becomes 'VUVLO' on both rows; the second row takes the first's description."""
+    for (a, _, fa), (b, _, fb) in zip(recs, recs[1:]):
+        sa, sb = a.get("symbol", ""), b.get("symbol", "")
+        if len(sa) == 1 and sa.isalpha() and sb and sb != sa and not b.get("parameter"):
+            a["symbol"] = b["symbol"] = sa + sb
+            b["parameter"] = a.get("parameter", "")
+            fa.append("symbol_joined")
+            fb.append("symbol_joined")
+
+
+def _common_prefix(x, y):
+    x, y = norm(x), norm(y)
+    n = 0
+    while n < min(len(x), len(y)) and x[n] == y[n]:
+        n += 1
+    return n
+
+
+def _label_orphans(recs):
+    """A row with values but no symbol or description belongs to a merged label cell of a
+    neighbour. The label sits on the row above (TI's usual layout) or below (the pypdfium2
+    backend places a vertically centred label on the later row): take the neighbour whose test
+    conditions share the longer prefix with the orphan's, the row above on a tie."""
+    labelled = lambda r: r.get("symbol") or r.get("parameter")
+    orphans = [i for i, (r, _, _) in enumerate(recs) if not labelled(r)]
+    for i in orphans:
+        prev = next((j for j in range(i - 1, -1, -1) if labelled(recs[j][0])), None)
+        nxt = next((j for j in range(i + 1, len(recs)) if labelled(recs[j][0])), None)
+        if prev is not None and prev < i - 1 and nxt is not None and nxt > i + 1:
+            continue                     # a run of orphans between two labels: too ambiguous
+        cond = recs[i][0].get("conditions", "")
+        score = lambda j: -1 if j is None else _common_prefix(cond, recs[j][0].get("conditions", ""))
+        src = prev if score(prev) >= score(nxt) and prev is not None else nxt
+        if src is None:
+            continue
+        for k in ("symbol", "parameter"):
+            if recs[src][0].get(k):
+                recs[i][0][k] = recs[src][0][k]
+        if not recs[i][0].get("unit") and recs[src][0].get("unit"):
+            recs[i][0]["unit"] = recs[src][0]["unit"]
+        recs[i][2].append("label_from_neighbour")
+    # the unit cell of a split row sits on one half only
+    for i, (r, _, extra) in enumerate(recs):
+        if r.get("unit") or not r.get("symbol"):
+            continue
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(recs) and recs[j][0].get("symbol") == r["symbol"] and recs[j][0].get("unit"):
+                r["unit"] = recs[j][0]["unit"]
+                extra.append("unit_from_neighbour")
+                break
 
 
 # ── unit repair against the text layer ──────────────────────────────────────

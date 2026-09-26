@@ -74,9 +74,11 @@ except ImportError:
     _reexec_or_die()
 
 
-def cache_dir(digest: str, ocr: bool = False) -> Path:
+def cache_dir(digest: str, ocr: bool = False, tag: str | None = None) -> Path:
     """Text-layer runs and OCR runs of the same PDF are different evidence, cached apart."""
-    return OUTPUT / "docling" / (digest[:16] + ("-ocr" if ocr else ""))
+    base = OUTPUT / "docling" / (digest[:16] + ("-ocr" if ocr else ""))
+    # a tuning variant (--cache-tag) lives beside the real cache, never in it
+    return base.with_name(base.name + f"-{tag}") if tag else base
 
 
 def sha256(path: Path) -> str:
@@ -112,7 +114,12 @@ def write_atomic(path: Path, text: str):
     os.replace(tmp, path)
 
 
-def make_converter(table_mode: str, timeout: float | None, ocr: bool = False):
+def make_converter(table_mode: str, timeout: float | None, ocr: bool = False,
+                   variant: dict | None = None):
+    """variant (tuning only, see eval/tune_docling.py): backend = docling_parse_v4 (default) |
+    docling_parse_v2 | pypdfium2; force_backend_text; do_cell_matching; images_scale; layout =
+    a spec name from docling.datamodel.layout_model_specs (e.g. DOCLING_LAYOUT_EGRET_MEDIUM)."""
+    variant = variant or {}
     opts = PdfPipelineOptions()
     # Datasheets normally have a text layer, and OCR over it only costs time (3.6x, identical
     # tables). --ocr is for the ones that don't: scans, image tiles, text drawn as outlines. Full-
@@ -128,7 +135,24 @@ def make_converter(table_mode: str, timeout: float | None, ocr: bool = False):
     opts.generate_page_images = False
     if timeout:
         opts.document_timeout = timeout
-    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
+    if "force_backend_text" in variant:
+        opts.force_backend_text = bool(variant["force_backend_text"])
+    if "do_cell_matching" in variant:
+        opts.table_structure_options.do_cell_matching = bool(variant["do_cell_matching"])
+    if "images_scale" in variant:
+        opts.images_scale = float(variant["images_scale"])
+    if "layout" in variant:
+        from docling.datamodel import layout_model_specs
+        opts.layout_options.model_spec = getattr(layout_model_specs, variant["layout"])
+    fmt = {"pipeline_options": opts}
+    backend = variant.get("backend")
+    if backend == "pypdfium2":
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+        fmt["backend"] = PyPdfiumDocumentBackend
+    elif backend == "docling_parse_v2":
+        from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+        fmt["backend"] = DoclingParseV2DocumentBackend
+    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(**fmt)})
 
 
 _LEADER = re.compile(r"(?:\s?\.){4,}\s?")
@@ -148,7 +172,7 @@ def page_markdown(doc, a: int, b: int) -> dict:
 def reexport(pdf: Path) -> int:
     """Rebuild every chunk's pages.json from its stored DoclingDocument, without re-converting."""
     from docling_core.types.doc import DoclingDocument
-    out_dir = cache_dir(sha256(pdf), getattr(reexport, "ocr", False))
+    out_dir = cache_dir(sha256(pdf), getattr(reexport, "ocr", False), getattr(reexport, "tag", None))
     n = 0
     for js in sorted(out_dir.glob("p[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9].json")):
         a, b = (int(x) for x in js.stem[1:].split("-"))
@@ -184,21 +208,24 @@ def load_manifest(out_dir: Path, pdf: Path, digest: str, n_pages: int, options: 
             "options": options, "versions": versions(), "chunks": {}}
 
 
-def extract(pdf: Path, converter, args) -> dict:
+def extract(pdf: Path, converter, args, max_chunks: int | None = None) -> dict:
     digest = sha256(pdf)
     n = page_count(pdf)
     first, last = 1, n
     if args.pages:
         a, _, b = args.pages.partition("-")
         first, last = max(1, int(a)), min(n, int(b or a))
-    out_dir = cache_dir(digest, args.ocr)
+    out_dir = cache_dir(digest, args.ocr, args.cache_tag)
     out_dir.mkdir(parents=True, exist_ok=True)
     options = {"ocr": "rapidocr-full-page" if args.ocr else False,
+               **({"variant": args.variant} if args.variant else {}),
                "table_mode": args.table_mode, "images": "placeholder"}
     manifest = load_manifest(out_dir, pdf, digest, n, options)
 
     todo = [(a, b) for a, b in chunks(first, last, args.chunk)
             if not (out_dir / f"{chunk_name(a, b)}.pages.json").exists()]
+    if max_chunks:
+        todo = todo[:max_chunks]
     done = 0
     print(f"{pdf.name}: {n} pages, {len(todo)} chunk(s) to do", flush=True)
     for a, b in todo:
@@ -230,6 +257,56 @@ def extract(pdf: Path, converter, args) -> dict:
     return manifest
 
 
+def todo_count(pdf: Path, args) -> int:
+    """Chunks of this PDF not yet in the cache (no models loaded)."""
+    n = page_count(pdf)
+    first, last = 1, n
+    if args.pages:
+        a, _, b = args.pages.partition("-")
+        first, last = max(1, int(a)), min(n, int(b or a))
+    out_dir = cache_dir(sha256(pdf), args.ocr, args.cache_tag)
+    return sum(1 for a, b in chunks(first, last, args.chunk)
+               if not (out_dir / f"{chunk_name(a, b)}.pages.json").exists())
+
+
+def run_isolated(pdfs, args) -> int:
+    """Convert in child processes of at most --chunks-per-process chunks each.
+
+    One long-lived converter grows: measured 2026-09-24, a batch process went from ~2.1 GB to
+    ~3 GB peak RSS over five hours and filled swap on a 6 GB machine. A fresh process every few
+    chunks bounds that. A child that makes no progress (a chunk failing every time) ends the
+    loop for that PDF instead of retrying forever; its error is in the manifest."""
+    import subprocess
+    passthrough = ["--chunk", str(args.chunk), "--table-mode", args.table_mode]
+    if args.pages:
+        passthrough += ["--pages", args.pages]
+    if args.timeout:
+        passthrough += ["--timeout", str(args.timeout)]
+    if args.ocr:
+        passthrough += ["--ocr"]
+    if args.variant:
+        passthrough += ["--variant", json.dumps(args.variant)]
+    if args.cache_tag:
+        passthrough += ["--cache-tag", args.cache_tag]
+    failed = 0
+    for pdf in pdfs:
+        if not pdf.is_file():
+            print(f"!! missing: {pdf}", flush=True)
+            failed += 1
+            continue
+        while True:
+            before = todo_count(pdf, args)
+            if before == 0:
+                break
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), str(pdf), *passthrough,
+                            "--in-process", "--max-chunks", str(args.chunks_per_process)])
+            if todo_count(pdf, args) >= before:
+                print(f"!! {pdf.name}: no progress in a fresh process — see its manifest", flush=True)
+                failed += 1
+                break
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("pdfs", nargs="*", type=Path)
@@ -241,6 +318,15 @@ def main():
     ap.add_argument("--ocr", action="store_true",
                     help="full-page OCR (RapidOCR) for PDFs without a usable text layer; "
                          "cached separately from text-layer runs")
+    ap.add_argument("--variant", type=json.loads, default=None,
+                    help='tuning only: JSON Docling settings, e.g. \'{"backend": "pypdfium2"}\'')
+    ap.add_argument("--cache-tag", default=None,
+                    help="tuning only: cache into output/docling/<sha>-<tag> instead of the real cache")
+    ap.add_argument("--chunks-per-process", type=int, default=10,
+                    help="convert in child processes of at most this many chunks (bounds memory "
+                         "growth); 0 = everything in this process")
+    ap.add_argument("--in-process", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--max-chunks", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--reexport", action="store_true",
                     help="only rebuild page markdown from cached chunks (fast, no conversion)")
     args = ap.parse_args()
@@ -253,19 +339,25 @@ def main():
         ap.error("no PDFs given")
 
     reexport.ocr = args.ocr
+    reexport.tag = args.cache_tag
+    if args.variant and not args.cache_tag:
+        ap.error("--variant needs --cache-tag, so a variant never writes into the real cache")
     if args.reexport:
         for pdf in pdfs:
             print(f"{pdf.name}: {reexport(pdf)} chunk(s) re-exported")
         return
 
-    converter = make_converter(args.table_mode, args.timeout, args.ocr)
+    if args.chunks_per_process and not args.in_process:
+        sys.exit(run_isolated(pdfs, args))
+
+    converter = make_converter(args.table_mode, args.timeout, args.ocr, args.variant)
     failed = 0
     for pdf in pdfs:
         if not pdf.is_file():
             print(f"!! missing: {pdf}", flush=True)
             failed += 1
             continue
-        m = extract(pdf, converter, args)
+        m = extract(pdf, converter, args, args.max_chunks)
         failed += any(c["status"] not in ("success", "partial_success")
                       for c in m["chunks"].values())
     sys.exit(1 if failed else 0)

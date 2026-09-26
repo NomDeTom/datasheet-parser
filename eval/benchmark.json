@@ -1,0 +1,60 @@
+{
+  "_README": [
+    "Known-answer pages for tuning Docling (eval/tune_docling.py). Documents are named by the",
+    "PDF stem in <AutoNotes>/Library/<stem>/<stem>.pdf; the PDFs themselves are not in this repo.",
+    "rows:      expected values read off the rendered page by a person (the answer, not a reader's)",
+    "find:      text that must be findable on that page (words present and correctly spaced)",
+    "registers: what a complete reading of the register pages contains",
+    "Checked 2026-09-24 against the rendered pages where noted."
+  ],
+  "documents": [
+    {
+      "doc": "tps62861", "pages": "6-6",
+      "note": "rendered page checked 2026-09-24: MIN column empty; pdfplumber shifted TYP into MIN",
+      "rows": [
+        {"page": 6, "symbol": "IQ(VIN)", "typ": 2.3, "max": 4.0, "unit": "µA"},
+        {"page": 6, "symbol": "IQ(VIN)", "typ": 2.5, "unit": "µA"},
+        {"page": 6, "symbol": "ISD(VIN)", "typ": 120.0, "max": 250.0, "unit": "nA"},
+        {"page": 6, "symbol": "VUVLO(R)", "typ": 1.65, "max": 1.75, "unit": "V"},
+        {"page": 6, "symbol": "VUVLO(F)", "typ": 1.56, "max": 1.7, "unit": "V"}
+      ]
+    },
+    {
+      "doc": "tps61230", "pages": "1-5",
+      "note": "rendered page 5 checked 2026-09-24: sub-rows share one unit cell",
+      "rows": [
+        {"page": 5, "symbol": "VUVLO", "typ": 2.0, "max": 2.1, "unit": "V"},
+        {"page": 5, "symbol": "VUVLO", "typ": 2.1, "max": 2.2, "unit": "V"},
+        {"page": 5, "symbol": "IQ", "typ": 35.0, "max": 60.0, "unit": "µA"},
+        {"page": 5, "symbol": "IQ", "typ": 200.0, "max": 230.0, "unit": "µA"},
+        {"page": 5, "symbol": "ISD", "typ": 1.5, "max": 6.0, "unit": "µA"}
+      ],
+      "find": [{"page": 1, "text": "Input Voltage Range: 2.3 V to 5.5 V"}]
+    },
+    {
+      "doc": "tps2378", "pages": "2-3",
+      "note": "Docling ran words together on the pin table (baseline)",
+      "find": [{"page": 3, "text": "Connect to positive PoE input power rail"}]
+    },
+    {
+      "doc": "tps63020", "pages": "1-2",
+      "note": "Docling ran words together on 23 of 30 pages (baseline)",
+      "find": [{"page": 1, "text": "Input voltage range: 1.8 V to 5.5 V"}]
+    },
+    {
+      "doc": "SX1280-1_DS_V3.3", "pages": "100-104",
+      "note": "baseline Docling reader: 1 register / 45 fields where pdfplumber had 3 / 32",
+      "registers": {"expect_registers": 3, "min_fields": 32}
+    },
+    {
+      "doc": "bq25601", "pages": "32-45",
+      "note": "neither reader recognises the register headings: 12 registers, no addresses",
+      "registers": {"expect_registers": 12, "min_fields": 96}
+    },
+    {
+      "doc": "IP5389H", "pages": "16-17",
+      "note": "figure text: the efficiency charts' titles and labels live inside pictures",
+      "find": [{"page": 17, "text": "Boost Efficiency Curve"}]
+    }
+  ]
+}
