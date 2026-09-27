@@ -8,7 +8,7 @@ sidecars.py — write the full-text and data sidecars beside every PDF in the va
 
 For each <stem>.pdf, beside it:
 
-  <stem>.text.md    Full text for search and cross-checks. One `=== PAGE n ===` marker per page,
+  <stem>.text.txt   Full text for search and cross-checks. One `=== PAGE n ===` marker per page,
                     so `grep -n` hits convert to page numbers. Docling's Markdown (compact tables,
                     picture placeholders, no embedded images) where the Docling cache has the page;
                     pypdf text otherwise, marked. Symbol-font private-use glyphs are translated
@@ -145,7 +145,7 @@ def _has_text(md: str) -> bool:
 
 def cache_coverage(cache: Path) -> int:
     """Pages a Docling cache has converted (from its chunk names), whether or not they held text.
-    Recorded in the .text.md so a later run can tell the cache has grown since (ingest --refresh)."""
+    Recorded in the .text.txt so a later run can tell the cache has grown since (ingest --refresh)."""
     if not cache.is_dir():
         return 0
     return sum(int(f.name[6:10]) - int(f.name[1:5]) + 1 for f in cache.glob("p*-*.pages.json"))
@@ -727,7 +727,8 @@ def main():
         tot_side += side
         ratios.append((side / size, pdf.name))
         if not args.report:
-            vaultpath.write_text(pdf.with_name(pdf.stem + ".text.md"), text)
+            vaultpath.write_text(pdf.with_name(pdf.stem + vaultpath.TEXT_SUFFIX), text)
+            pdf.with_name(pdf.stem + vaultpath.LEGACY_TEXT_SUFFIX).unlink(missing_ok=True)
             vaultpath.write_text(pdf.with_name(pdf.stem + ".data.json"), blob + "\n")
         print(f"{pdf.name[:48]:48} pages {len(raw):4} (docling {used['docling']:4}, "
               f"pypdf {used['pypdf']:4}, ocr {used['ocr']:3}, disagree {len(used['disagree']):3})  rows {len(data['spec_rows']):4}  "

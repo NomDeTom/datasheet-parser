@@ -169,7 +169,7 @@ def stale(root: Path):
     for d in sorted(p for p in (root / "Library").iterdir() if p.is_dir()):
         if d.name.startswith(MARKED):
             continue
-        tmd = d / (d.name + ".text.md")
+        tmd = d / (d.name + vaultpath.TEXT_SUFFIX)
         if not (d / (d.name + ".pdf")).exists() or not tmd.exists():
             continue
         fm = _frontmatter(tmd)
@@ -178,7 +178,7 @@ def stale(root: Path):
             continue
         cache = sidecars.OUTPUT / "docling" / sha[:16]
         ocr = sidecars.OUTPUT / "docling" / (sha[:16] + "-ocr")
-        # older .text.md files predate the coverage fields: fall back to pages that used Docling
+        # older text sidecars predate the coverage fields: fall back to pages that used Docling
         had = int(fm.get("docling_cache_pages", fm.get("text_docling_pages", 0)) or 0)
         had_ocr = int(fm.get("ocr_cache_pages", fm.get("text_ocr_pages", 0)) or 0)
         if sidecars.cache_coverage(cache) > had or sidecars.cache_coverage(ocr) > had_ocr:

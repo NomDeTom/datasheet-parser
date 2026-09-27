@@ -53,7 +53,7 @@ Every stage is also a script, safe to re-run:
 | `file_pdfs.py apply plan.tsv [--skip-undecided]` | execute a reviewed plan; refuses if anything changed since; journals every move |
 | `file_pdfs.py undo journal.json` / `check` | reverse a filing / audit the vault's names and links |
 | `docling_extract.py PDF… [--ocr] [--pages A-B]` | Docling conversion in 20-page chunks, resumable, cached by content hash in `output/docling/<sha>` (`--ocr`: separate cache) |
-| `sidecars.py [--pdf PDF]…` | write `.text.md` + `.data.json` |
+| `sidecars.py [--pdf PDF]…` | write `.text.txt` + `.data.json` |
 | `cards.py [--doc NAME]…` | write the Obsidian cards |
 | `build_db.py` | rebuild `autonotes.sqlite` |
 | `verify_library.py [--min-registers N]` | the gate: exits non-zero on any failure |

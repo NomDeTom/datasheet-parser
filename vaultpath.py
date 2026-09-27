@@ -21,6 +21,12 @@ CONFIG_FILE = Path(__file__).resolve().parent / ".autonotes-vault"
 ENV_VAR = "AUTONOTES_VAULT"
 VAULT_LEAF = Path("AutoNotes") / "Reference Material"
 
+# A document's full-text sidecar. `.txt`, not `.md`: Obsidian does not index it, so a
+# multi-megabyte datasheet no longer stalls the mobile app. The legacy name is removed
+# whenever a document's sidecars are rewritten.
+TEXT_SUFFIX = ".text.txt"
+LEGACY_TEXT_SUFFIX = ".text.md"
+
 # Conventional spots to try, in order. Nothing here names a particular machine: the vault is
 # found as an `AutoNotes` folder directly under home, under Documents, one level down from
 # either (a notes tree that contains it), or one level under a drive root on Windows.

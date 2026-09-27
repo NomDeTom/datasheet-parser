@@ -6,8 +6,8 @@ verify_library.py — check the vault's sidecars and cards; non-zero exit on any
     python verify_library.py --min-registers 415      # fail if the register total drops below
 
 Failures:
-  * a PDF without its `.text.md` or `.data.json`, or (non-paper) without its card
-  * a `.text.md` whose page markers don't match the PDF's page count
+  * a PDF without its `.text.txt` or `.data.json`, or (non-paper) without its card
+  * a `.text.txt` whose page markers don't match the PDF's page count
   * a `.data.json` with the wrong schema, a confidence outside high/medium/low/none, a value
     with no page and no external file behind it (verified values excepted: a person is their
     source), or an impossible range (min > max)
@@ -49,15 +49,15 @@ def main():
         exports.update({e.file: e for e in enrichment.load_exports(folder)})
     names = {}
     for md in root.rglob("*.md"):
-        if md.name.endswith(".text.md") or ".obsidian" in md.parts:
+        if md.name.endswith(vaultpath.LEGACY_TEXT_SUFFIX) or ".obsidian" in md.parts:
             continue
         names.setdefault(md.stem.lower(), []).append(md.relative_to(root).as_posix())
     add = lambda k, v: fail.setdefault(k, []).append(v)
     for pdf in pdfs:
-        text, data_f, card = (pdf.with_name(pdf.stem + s) for s in (".text.md", ".data.json", ".md"))
+        text, data_f, card = (pdf.with_name(pdf.stem + s) for s in (vaultpath.TEXT_SUFFIX, ".data.json", ".md"))
         name = pdf.relative_to(root).as_posix()
         if not text.exists():
-            add("missing .text.md", name)
+            add("missing " + vaultpath.TEXT_SUFFIX, name)
         if not data_f.exists():
             add("missing .data.json", name)
             continue

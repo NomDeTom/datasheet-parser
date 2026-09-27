@@ -85,7 +85,7 @@ def properties(data: dict, pdf: Path) -> dict:
         "revision": d.get("revision"),
         "pages": d.get("pages"),
         "pdf": f"[[{pdf.name}]]",
-        "text": f"[[{pdf.stem}.text.md]]",
+        "text": f"[[{pdf.stem}{vaultpath.TEXT_SUFFIX}]]",
     }
     for key, lo_k, hi_k in (("vin", "vin_min", "vin_max"), ("vout", "vout_min", "vout_max"),
                             ("iout", None, "iout_max"), ("fsw", "fsw_min_khz", "fsw_max_khz")):
@@ -129,7 +129,7 @@ def body(data: dict, pdf: Path) -> str:
     d = data["document"]
     title = d.get("title") or ""
     lines = [f"# {pdf.stem}" + (f" — {title}" if title else ""), "",
-             f"**PDF:** [[{pdf.name}]] · **Full text:** [[{pdf.stem}.text.md|text]] · "
+             f"**PDF:** [[{pdf.name}]] · **Full text:** [[{pdf.stem}{vaultpath.TEXT_SUFFIX}|text]] · "
              f"**Data:** `{pdf.stem}.data.json`", ""]
     params = data.get("params", [])
     if params:

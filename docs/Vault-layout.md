@@ -8,7 +8,7 @@ AutoNotes/
 ├── Library/<doc>/              one folder per document (identity = the PDF's sha256)
 │   ├── <doc>.pdf
 │   ├── <doc>.md                the card
-│   ├── <doc>.text.md           full text
+│   ├── <doc>.text.txt          full text
 │   └── <doc>.data.json         typed data
 ├── Papers/                     research papers (<first-author>-<year>-<topic>), same sidecars
 ├── Topics/                     your summary / comparison pages, with embedded queries

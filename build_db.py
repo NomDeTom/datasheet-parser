@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-build_db.py — build a SQLite database from the vault's `.data.json` and `.text.md` sidecars.
+build_db.py — build a SQLite database from the vault's `.data.json` and `.text.txt` sidecars.
 
     python build_db.py                        # -> <vault>/autonotes.sqlite
     python build_db.py -o /tmp/autonotes.sqlite
@@ -20,7 +20,7 @@ Tables:
               extractor, confidence, flags)
     registers(doc, name, address, reset, page, description)
     register_fields(doc, register, address, bits, name, access, reset, description)
-    pages(doc, page, text)      -- FTS5 full-text index over every page of every .text.md
+    pages(doc, page, text)      -- FTS5 full-text index over every page of every .text.txt
 
 Example queries:
     SELECT doc, min, max FROM params WHERE key='vin' AND max >= 24 AND confidence='high';
@@ -124,7 +124,7 @@ def build(vault: Path, out: Path):
                            [(doc, reg.get("name"), reg.get("address"), f.get("bits"),
                              f.get("name"), f.get("access"), f.get("reset"), f.get("description"))
                             for f in reg.get("fields", [])])
-        text_file = data_file.with_name(doc + ".text.md")
+        text_file = data_file.with_name(doc + vaultpath.TEXT_SUFFIX)
         if text_file.exists():
             rows = list(split_pages(text_file.read_text(encoding="utf-8")))
             db.executemany("INSERT INTO pages VALUES (?,?,?)", [(doc, n, t) for n, t in rows])

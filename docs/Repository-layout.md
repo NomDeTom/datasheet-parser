@@ -4,7 +4,7 @@
 ingest.py              the whole pipeline for the inbox (systemd runs this)
 file_pdfs.py           filing: plan / apply / undo / check
 docling_extract.py     Docling conversion, chunked, resumable, content-addressed cache
-sidecars.py            .text.md + .data.json
+sidecars.py            .text.txt + .data.json
 cards.py               Obsidian cards
 build_db.py            autonotes.sqlite
 verify_library.py      checks

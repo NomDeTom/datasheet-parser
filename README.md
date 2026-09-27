@@ -4,7 +4,7 @@ Turns electronics PDFs — datasheets, application notes, user manuals, errata, 
 
 Drop a PDF into the vault's `Import files/` folder and the pipeline files it, reads it, and writes beside it:
 
-- **`<doc>.text.md`** — the full text, one `=== PAGE n ===` marker per page, so a `grep -n` hit is a page number. Tables kept as tables, figure labels included.
+- **`<doc>.text.txt`** — the full text (plain text, so Obsidian does not index it), one `=== PAGE n ===` marker per page, so a `grep -n` hit is a page number. Tables kept as tables, figure labels included.
 - **`<doc>.data.json`** — typed, database-ready data: key parameters, electrical-characteristics rows, register maps, paper metadata. Every value carries the page it came from, every reading that produced it, and a confidence level.
 - **`<doc>.md`** — an Obsidian card: generated properties for Bases / Dataview, and a `## Notes` section that is yours and is never overwritten.
 
