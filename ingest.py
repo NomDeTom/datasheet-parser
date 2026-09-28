@@ -10,7 +10,8 @@ ingest.py — process whatever has been dropped into the vault's `Import files/`
 One pass, for PDFs that have stopped growing (a sync tool may still be writing them):
 
   1. file    file_pdfs.py plan -> apply --skip-undecided, journalled (file_pdfs.py undo reverses it)
-               identical to a filed PDF  -> renamed `DUPLICATE - <name>`, left in the inbox
+               identical to a filed PDF, in bytes or in the text of every page
+                                         -> renamed `DUPLICATE - <name>`, left in the inbox
                needs a person's decision -> renamed `REVIEW - <name>`, left in the inbox
                                             (remove the prefix to have it retried)
   2. extract Docling (docling_extract.py) for documents up to --max-pages; longer ones are queued

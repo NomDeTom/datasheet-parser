@@ -12,7 +12,9 @@ Filing is split so that nothing moves until a person (or an agent) has looked at
 
 plan
     Hashes every source PDF and compares it with every PDF already in the vault:
-      * byte-identical to a filed PDF        -> action `skip`
+      * byte-identical to a filed PDF        -> action `mark` (`DUPLICATE - `, left in the inbox)
+      * same text on every page as a filed PDF (same page count, different bytes — a download
+        site's metadata stamp) -> `mark` likewise
       * same document name, newer version    -> `file`, plus a `rename` row marking the old
                                                 one `SUPERSEDED - ` (nothing is deleted)
       * same document name, older/same ver.  -> `file` under a `DUPLICATE - ` name, for review
@@ -90,6 +92,42 @@ def page1_text(path: Path) -> str:
         return (PdfReader(str(path)).pages[0].extract_text() or "")[:2000]
     except Exception:
         return ""
+
+
+TEXT_FP_CACHE = INGEST_STATE / "text-fingerprints.json"   # {pdf sha256: fingerprint or null}
+
+
+def page_count(pdf: Path) -> int:
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(str(pdf)).pages)
+    except Exception:
+        return 0
+
+
+def text_fingerprint(pdf: Path, digest: str, cache: dict):
+    """sha256 of every page's text, whitespace-normalised; None for a PDF with too little text
+    to tell apart (scans). Two files with one fingerprint are one document in different bytes —
+    e.g. a download site's XMP stamp appended by ExifTool."""
+    if digest not in cache:
+        import logging
+        from pypdf import PdfReader
+        logging.getLogger("pypdf").setLevel(logging.ERROR)
+        try:
+            pages = [" ".join((p.extract_text() or "").split()) for p in PdfReader(str(pdf)).pages]
+        except Exception:
+            pages = []
+        cache[digest] = hashlib.sha256("\f".join(pages).encode()).hexdigest() \
+            if sum(map(len, pages)) >= 500 else None
+    return cache[digest]
+
+
+def filed_pages(pdf: Path) -> int:
+    try:
+        d = json.loads(pdf.with_name(pdf.stem + ".data.json").read_text(encoding="utf-8"))
+        return int(d["document"]["pages"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return page_count(pdf)
 
 
 def headline(text: str) -> str:
@@ -202,13 +240,19 @@ def cmd_plan(args):
         filed = [p for p in vault_pdfs(vault / "Library")]
     else:
         filed = [p for p in vault_pdfs(vault) if "attachments" in (x.lower() for x in p.parts)]
-    by_hash, by_family, by_prefix = {}, {}, {}
+    by_hash, by_family, by_prefix, by_pages, filed_sha = {}, {}, {}, {}, {}
     for p in filed:
-        by_hash.setdefault(sha256(p), p)
+        filed_sha[p] = sha256(p)
+        by_hash.setdefault(filed_sha[p], p)
+        by_pages.setdefault(filed_pages(p), []).append(p)
         by_family.setdefault(family_key(p.stem), []).append(p)
         by_prefix.setdefault(part_prefix(p.stem), []).append(p)
 
-    rows, seen_hash, planned_names = [], {}, set()
+    try:
+        fp_cache = json.loads(TEXT_FP_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fp_cache = {}
+    rows, seen_hash, seen_text, planned_names = [], {}, {}, set()
     for src in sources:
         digest = sha256(src)
         text = page1_text(src)
@@ -225,6 +269,23 @@ def cmd_plan(args):
             rows.append(row)
             continue
         seen_hash[digest] = src.name
+        # same text, different bytes: text is read only when another PDF has the same page count
+        n = page_count(src)
+        peers, batch = (by_pages.get(n, []), seen_text.get(n, [])) if n else ([], [])
+        twin = None
+        if peers or batch:
+            mine = text_fingerprint(src, digest, fp_cache)
+            if mine:
+                twin = next((f"filed {p.name}" for p in peers
+                             if text_fingerprint(p, filed_sha[p], fp_cache) == mine), None) \
+                    or next((f"{q.name}, also in this batch" for q, d in batch
+                             if text_fingerprint(q, d, fp_cache) == mine), None)
+        if twin:
+            row.update(action="mark", folder="", name="DUPLICATE - " + src.name,
+                       reason=f"same text as {twin} ({n} pages), different bytes")
+            rows.append(row)
+            continue
+        seen_text.setdefault(n, []).append((src, digest))
 
         name = clean_name(src.stem) + ".pdf"
         folder, why = rule_folder(rules, src.name, text)
@@ -272,6 +333,8 @@ def cmd_plan(args):
         planned_names.add(key)
         rows.append(row)
 
+    INGEST_STATE.mkdir(parents=True, exist_ok=True)
+    write_text(TEXT_FP_CACHE, json.dumps(fp_cache))
     out = Path(args.output)
     with open(out, "w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, PLAN_FIELDS, delimiter="\t", lineterminator="\n")
@@ -295,6 +358,9 @@ def read_plan(path: Path):
 
 
 def target_of(vault: Path, row) -> Path:
+    if row["action"] == "rename" and is_library(vault):
+        stem = Path(row["name"]).stem                # the whole document folder is renamed
+        return vault / "Library" / stem / row["name"]
     if row["action"] in ("rename", "mark"):
         return Path(row["source"]).with_name(row["name"])
     if is_library(vault):
@@ -344,6 +410,9 @@ def cmd_apply(args):
             problems.append(f"{src.name}: destination outside the vault: {dst}")
         if path_key(dst) in targets:
             problems.append(f"{src.name}: two rows target {dst.name}")
+        if is_library(vault) and r["action"] == "rename":
+            problems += [f"{src.name}: {p}" for p in
+                         rename_problems(root_of(vault), src.parent.name, dst.parent.name)]
         targets.add(path_key(dst))
         if is_library(vault) and r["action"] == "file" and dst.parent.exists():
             problems.append(f"{src.name}: document folder already exists: {dst.parent.name}")
@@ -362,8 +431,17 @@ def cmd_apply(args):
     for r in sorted(rows, key=lambda r: r["action"] != "rename"):
         src, dst = Path(r["source"]), target_of(vault, r)
         op = "copy" if (args.copy and r["action"] == "file") else "move"
+        if is_library(vault) and r["action"] == "rename":
+            op = "rename_document"
         if args.dry_run:
             print(f"  would {op} {src} -> {dst}")
+            continue
+        if op == "rename_document":
+            by = re.match(r"superseded by (.+?)(?:\.pdf)?(?:;|$)", r["reason"])
+            _rename(root_of(vault), src.parent.name, dst.parent.name, False, by.group(1) if by else "")
+            journal["ops"].append({"op": op, "old": src.parent.name, "new": dst.parent.name})
+            write_text(journal_path, json.dumps(journal, indent=1))
+            print(f"  renamed {src.parent.name} -> {dst.parent.name}")
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         (shutil.copy2 if op == "copy" else shutil.move)(str(src), str(dst))
@@ -386,6 +464,18 @@ def cmd_undo(args):
     journal = json.loads(Path(args.journal).read_text(encoding="utf-8"))
     failed = 0
     for op in reversed(journal["ops"]):
+        if op["op"] == "rename_document":
+            root = root_of(Path(journal["vault"]))
+            problems = rename_problems(root, op["new"], op["old"])
+            if problems:
+                print(f"  skip {op['new']}: {'; '.join(problems)}")
+                failed += 1
+            elif args.dry_run:
+                print(f"  would rename {op['new']} -> {op['old']}")
+            else:
+                _rename(root, op["new"], op["old"], False, "")
+                print(f"  restored {op['old']}")
+            continue
         if op["op"] == "create":
             card = Path(op["to"])
             if card.exists() and (sha256(card) == op["sha256"] or args.discard_edits):
@@ -622,6 +712,8 @@ def _rename(root: Path, old: str, new: str, dry: bool, superseded_by: str):
                 out["renamed_from"] = corrections.block("renamed_from", [*was, old])
             if superseded_by:
                 out["superseded_by"] = [f"superseded_by: {json.dumps(f'[[{superseded_by}]]')}"]
+            elif not new.startswith(MARK_PREFIXES):
+                out["superseded_by"] = []
             return out
         _edit_card(card, done)
         if data_file.exists():
