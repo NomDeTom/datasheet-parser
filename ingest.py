@@ -20,6 +20,11 @@ One pass, for PDFs that have stopped growing (a sync tool may still be writing t
   5. refresh documents whose Docling / OCR cache has grown since their sidecars were built
              (the overnight batch, the deferred manuals): sidecars, cards, database, check
 
+Every run, --nightly included, first applies the cards' `fix:` corrections (corrections.py): a
+`name = …` renames the document (file_pdfs.py rename), and a document whose other corrections
+differ from what its `.data.json` last applied is rebuilt. An edit in Obsidian takes effect
+within one timer period.
+
 Only one pass runs at a time (a lock in the state folder); a pass that finds the lock taken exits
 quietly — the periodic timer picks up anything it would have handled. The pass repeats until the
 inbox holds nothing new, so files that land mid-run are not missed.
@@ -44,7 +49,7 @@ import vaultpath
 
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
-STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "autonotes-ingest"
+STATE = vaultpath.INGEST_STATE
 MARKED = ("DUPLICATE - ", "SUPERSEDED - ", "REVIEW - ")
 PARTIAL = re.compile(r"^(\.syncthing\.|~syncthing~|\.~|~\$)|\.(tmp|part|crdownload)$", re.I)
 
@@ -222,6 +227,52 @@ def build(docs, root, log):
     return rc, verify
 
 
+def uncorrected(root: Path):
+    """Documents whose card `fix` entries differ from what their `.data.json` last applied."""
+    import corrections
+    out = []
+    for data_file in sorted((root / "Library").glob("*/*.data.json")):
+        stem = data_file.name[: -len(".data.json")]
+        card = data_file.with_name(stem + ".md")
+        if stem.startswith(MARKED) or not card.exists():
+            continue
+        fixes, problems = corrections.read(corrections.parse_frontmatter(card.read_text(encoding="utf-8")))
+        for k in corrections.RENAMING:
+            fixes.pop(k, None)
+        doc = json.loads(data_file.read_text(encoding="utf-8")).get("document", {})
+        if fixes != (doc.get("corrections") or {}) or problems != (doc.get("correction_problems") or []):
+            out.append((data_file.with_name(stem + ".pdf"), fixes, problems))
+    return out
+
+
+def apply_corrections(root: Path, log, dry=False):
+    """Every card's `fix`: renames first, then rebuild what else changed. -> report lines."""
+    import corrections
+    import file_pdfs
+    lines, renamed = [], 0
+    for old, new, sb in file_pdfs.pending_renames(root):
+        request = file_pdfs.request_id(new, sb)
+        try:
+            lines += file_pdfs.rename_document(root, old, new, dry, sb)
+            renamed += not dry
+        except ValueError as exc:
+            lines.append(f"**[[{old}]] not changed to `{request}`**: {exc} — recorded on the card as "
+                         f"`{corrections.REFUSED_KEY}`; change the `fix` entry to retry")
+            if not dry:
+                file_pdfs.refuse_rename(root, old, request, str(exc))
+    todo = uncorrected(root)
+    for pdf, fixes, problems in todo:
+        applied = "; ".join(corrections.entry(k, v) for k, v in fixes.items())
+        lines.append(f"{'would correct' if dry else 'corrected'} [[{pdf.stem}]]: {applied}" if applied
+                     else f"corrections {'would be ' if dry else ''}cleared on [[{pdf.stem}]]"
+                     + (f" — **not applied**: {'; '.join(problems)}" if problems else ""))
+    if not dry and (renamed or todo):
+        rc, verify = build([p for p, _, _ in todo], root, log)
+        lines.append("library check " + ("passed" if verify == 0 else "**failed**")
+                     + ("" if rc == 0 else " — rebuild had errors, see run log"))
+    return lines
+
+
 def write_report(root: Path, lines):
     if not lines:
         return
@@ -326,6 +377,11 @@ def main():
 
     log_path = STATE / f"run-{time.strftime('%Y%m%d-%H%M%S')}.log"
     with open(log_path, "w", encoding="utf-8") as log:
+        lines = apply_corrections(root, log, args.dry_run)
+        if lines:
+            print("\n".join(lines))
+            if not args.dry_run:
+                write_report(root, lines)
         if args.nightly:
             write_report(root, nightly(root, args, log) + refresh(root, log, args.dry_run))
             return

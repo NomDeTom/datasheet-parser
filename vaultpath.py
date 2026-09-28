@@ -27,6 +27,9 @@ VAULT_LEAF = Path("AutoNotes") / "Reference Material"
 TEXT_SUFFIX = ".text.txt"
 LEGACY_TEXT_SUFFIX = ".text.md"
 
+# ingest.py's plans, journals, nightly queue and lock; outside the vault so they never sync.
+INGEST_STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "autonotes-ingest"
+
 # Conventional spots to try, in order. Nothing here names a particular machine: the vault is
 # found as an `AutoNotes` folder directly under home, under Documents, one level down from
 # either (a notes tree that contains it), or one level under a drive root on Windows.

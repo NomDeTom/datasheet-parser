@@ -41,6 +41,7 @@ import sys
 from pathlib import Path
 
 import classify
+import corrections
 import enrichment
 import fuse
 import vaultpath
@@ -240,19 +241,7 @@ def build_text(pdf, digest, raw_pages, dpages, today, ocr_pages=None, coverage=(
 def read_frontmatter(md: Path) -> dict:
     if not md.exists():
         return {}
-    text = md.read_text(encoding="utf-8", errors="replace")
-    m = re.match(r"---\n(.*?)\n---", text, re.S)
-    out = {}
-    for line in (m.group(1) if m else "").splitlines():
-        k, sep, v = line.partition(":")
-        if not sep or line.startswith(" "):
-            continue
-        v = v.strip()
-        try:
-            out[k.strip()] = json.loads(v)
-        except ValueError:
-            out[k.strip()] = v
-    return out
+    return corrections.parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
 
 
 def previous(pdf: Path) -> dict:
@@ -453,9 +442,10 @@ def build_data(pdf, digest, n_pages, cache, raw_pages, today, exports=None, over
              "max": "" if r["max"] is None else str(r["max"]), "unit": r["unit"]})
     d_elec = [{"name": k, "specs": v} for k, v in d_sections.items()]
 
-    kind = doc_type(pdf)
     prev = previous(pdf)
     card = card_props(pdf)
+    fixes, fix_problems = corrections.read(card)
+    kind = fixes.get("doc_type") or doc_type(pdf)
     prev_doc = prev.get("document", {})
     original_name = card.get("original_name") or prev_doc.get("original_name") or pdf.name
     params = []
@@ -511,6 +501,10 @@ def build_data(pdf, digest, n_pages, cache, raw_pages, today, exports=None, over
         curated)
     if kind != "datasheet":
         klass["product_type"], klass["classified_by"] = kind.replace("_", "-"), "doc-type"
+    corrections.apply(klass, fixes)                    # after the doc-type rule: the card wins
+    klass["correction_problems"] = fix_problems
+    if fix_problems:
+        flags.append("fix_rejected")
     if not klass["converts_voltage"]:
         # Vin/Vout/Iout/fsw describe a conversion. For an MCU, radio or sensor, page-1 guesses at
         # them are noise (SX1261: "Vin 4-4 V", "fsw 960000 kHz" — its RF band). Keep only what a

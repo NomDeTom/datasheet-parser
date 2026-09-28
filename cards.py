@@ -33,10 +33,10 @@ OWNED = [
     "product_type", "topology", "converts_voltage", "steps_down",
     "is_converter", "is_charger", "is_ldo", "is_power_monitor", "is_protection", "is_load_switch",
     "is_mcu", "is_rf", "is_sensor", "is_buck", "is_boost", "is_buck_boost", "is_linear",
-    "ti_part", "lifecycle", "generated",
+    "ti_part", "lifecycle", "corrected", "generated",
 ]
 # Properties a person owns and cards.py never writes: category, verified (list of params checked),
-# verified_on, verified_note, lcsc (correction), original_name, tags, aliases, …
+# verified_on, verified_note, lcsc (correction), fix (see corrections.py), original_name, tags, …
 # The schema-1 cards wrote a generated boolean `verified`; that one is dropped on regeneration.
 LEGACY_OWNED = {"verified": (True, False, "true", "false")}
 
@@ -121,6 +121,7 @@ def properties(data: dict, pdf: Path) -> dict:
                              *(f for p in params.values() for f in p.get("flags", []))})
     props["product_type"] = ptype or None
     props["topology"] = topo or None
+    props["corrected"] = sorted(d.get("corrections") or {})
     props["generated"] = data.get("extraction", {}).get("generated")
     return props
 
@@ -154,9 +155,13 @@ def body(data: dict, pdf: Path) -> str:
         summary = ", ".join(f"{by[c]} {c}" for c in ("high", "medium", "low") if c in by)
         lines += [f"{len(rows)} spec-table rows ({summary}) and "
                   f"{len(data.get('registers', []))} registers in the data file.", ""]
+    if d.get("correction_problems"):
+        lines += ["> [!warning] Not applied from `fix`"] + \
+                 [f"> - {p}" for p in d["correction_problems"]] + [""]
     lines += ["> [!note] Generated", "> Everything above **Notes** is rewritten by "
               "`cards.py`. Write below it, or add your own properties. To mark values you have "
-              "checked against the PDF, add `verified: [vin, vout]` (and `verified_on`).", ""]
+              "checked against the PDF, add `verified: [vin, vout]` (and `verified_on`). To correct a "
+              "name, type or part, add a `fix` list of `field = value` entries.", ""]
     return "\n".join(lines)
 
 

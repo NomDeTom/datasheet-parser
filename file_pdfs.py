@@ -34,6 +34,18 @@ undo
     still have the recorded sha256 and the original location must be free — and a step that fails
     verification is reported and left alone rather than forced.
 
+rename [OLD NEW]
+    Renames a filed document everywhere: its Library/ folder and every file in it, the card, the
+    wikilinks to it anywhere in the Obsidian vault, the parser's output/<stem> cache and the
+    nightly queue. With no names, applies every card's `fix: name = …` entry (corrections.py) —
+    the way to correct a name by hand from Obsidian; ingest.py does the same at the start of each
+    pass. The entry is removed and the old name appended to the card's `renamed_from:`. The version
+    rule from `plan` applies: a name joining a family that holds a newer version lands as
+    `SUPERSEDED - <name>`, and one newer than the family's current version marks those. A
+    `superseded_by = <doc>` entry marks the document outright, for lineage the names do not show;
+    either way the card gets `superseded_by: [[<doc>]]`. A refused request is recorded as
+    `fix_refused:` and not retried until the entries change. To reverse one, rename it back.
+
 check
     Reports PDFs outside an `attachments/` folder, names that break the conventions, PDFs no note
     links to, and anything still sitting in `Import files/`. Exit 1 if any are found.
@@ -45,19 +57,22 @@ check
 """
 import argparse
 import csv
+import fcntl
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
 import time
 from pathlib import Path
 
-from vaultpath import dedupe, find_vault, path_key, root_of, write_text
+from vaultpath import INGEST_STATE, TEXT_SUFFIX, dedupe, find_vault, path_key, root_of, write_text
 
 PLAN_FIELDS = ["action", "source", "sha256", "folder", "name", "reason", "page1"]
 MARK_PREFIXES = ("DUPLICATE - ", "SUPERSEDED - ")
 RULES_FILE = ".filing-rules.json"
+PARSE_CACHE = Path(__file__).resolve().parent / "output"   # twin_notes.py's output/<stem>/
 
 
 # ── identification ───────────────────────────────────────────────────────────
@@ -417,6 +432,259 @@ def cmd_undo(args):
     sys.exit(1 if failed else 0)
 
 
+# ── rename ───────────────────────────────────────────────────────────────────
+_ILLEGAL = re.compile(r'[\\/:*?"<>|#^\[\]]')           # Windows filenames, or wikilink syntax
+
+
+def obsidian_root(root: Path) -> Path:
+    """The outermost Obsidian vault holding AutoNotes/ (which may be opened on its own too):
+    links into the library can live anywhere in it."""
+    found = [p for p in (root, *root.parents) if (p / ".obsidian").is_dir()]
+    return found[-1] if found else root
+
+
+SUPERSEDED = "SUPERSEDED - "
+
+
+def _unmarked(stem: str) -> str:
+    for p in MARK_PREFIXES:
+        if stem.startswith(p):
+            return stem[len(p):]
+    return stem
+
+
+def request_id(name: str, superseded_by: str = "") -> str:
+    """What a card asked for, as recorded in `fix_refused` so the same request is not retried."""
+    return f"name = {name}" + (f", superseded_by = {superseded_by}" if superseded_by else "")
+
+
+def pending_renames(root: Path):
+    """(old, name, superseded_by) for every card whose `fix` holds `name = …` or
+    `superseded_by = …`, unless that exact request was refused (`fix_refused`)."""
+    import corrections
+    out = []
+    for card in sorted((root / "Library").glob("*/*.md")):
+        if card.stem != card.parent.name:
+            continue
+        props = corrections.parse_frontmatter(card.read_text(encoding="utf-8"))
+        fixes = corrections.read(props)[0]
+        name = re.sub(r"(?i)\.pdf$", "", fixes.get("name", "")) or card.stem
+        sb = fixes.get("superseded_by", "")
+        if name == card.stem and not sb:
+            continue
+        if not str(props.get(corrections.REFUSED_KEY) or "").startswith(request_id(name, sb) + ":"):
+            out.append((card.stem, name, sb))
+    return out
+
+
+def _edit_card(card: Path, edit):
+    """Rewrite a card's frontmatter only: edit(props, blocks) returns {key: lines or []}, [] deletes."""
+    import cards
+    import corrections
+    text = card.read_text(encoding="utf-8")
+    fm, order, _ = cards.split_card(text)
+    for k, lines in edit(corrections.parse_frontmatter(text), fm).items():
+        fm[k] = lines
+        if k not in order:
+            order.append(k)
+    m = re.match(r"---\n.*?\n---\n?", text, re.S)
+    write_text(card, "---\n" + "\n".join(l for k in order for l in fm[k]) + "\n---\n"
+               + (text[m.end():] if m else "\n"))
+
+
+def _vault_files(vault: Path):
+    for d, dirs, files in os.walk(vault):
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        for f in files:
+            yield Path(d) / f
+
+
+def _link_re(old: str):
+    """[[old]], [[old.pdf]], [[old.text.txt|text]], ![[old.pdf#page=3]], [[Library/old/old.pdf]]."""
+    exts = "|".join(re.escape(e) for e in (".pdf", ".md", ".data.json", TEXT_SUFFIX))
+    return re.compile(r"(!?\[\[)((?:[^\]|#\n]*/)?)" + re.escape(old)
+                      + rf"(?=(?:{exts})?(?:\]\]|\||#))", re.I)
+
+
+def rename_problems(root: Path, old: str, new: str):
+    src = root / "Library" / old
+    problems = []
+    if not (src / (old + ".pdf")).is_file():
+        problems.append(f"no document {old}")
+    base = _unmarked(new)
+    if not base or _ILLEGAL.search(base) or base != base.strip(" .") or base.startswith(MARK_PREFIXES):
+        problems.append(f"{base!r} is not a usable file name")
+    taken = {(new + s).lower() for s in (".md", ".pdf", TEXT_SUFFIX, ".data.json")}
+    clash = sorted({f.parent.relative_to(obsidian_root(root)).as_posix()
+                    for f in _vault_files(obsidian_root(root))
+                    if f.name.lower() in taken and f.parent != src})
+    problems += [f"{d}/ already holds a {new} note or file" for d in clash]
+    dst = root / "Library" / new
+    if dst.exists() and path_key(dst.resolve()) != path_key(src.resolve()) \
+            and f"AutoNotes/Library/{new}" not in clash:
+        problems.append(f"Library/{new} already exists")
+    cache = PARSE_CACHE
+    if old != new and (cache / old).is_dir() and (cache / new).exists():
+        problems.append(f"parse cache output/{new} already exists")
+    return problems
+
+
+def plan_rename(root: Path, old: str, name: str, superseded_by: str = ""):
+    """-> (final name, what supersedes it, [older documents it supersedes]).
+
+    The same version rule as filing: a name that joins a family holding a newer version lands
+    as `SUPERSEDED - <name>`; one that is newer than the family's current version marks those.
+    `superseded_by` states the lineage outright, for when the names do not show it."""
+    lib = root / "Library"
+    if superseded_by:
+        if superseded_by in (old, name) or not (lib / superseded_by / (superseded_by + ".pdf")).is_file():
+            raise ValueError(f"superseded_by: no other document {superseded_by}")
+        if superseded_by.startswith(MARK_PREFIXES):
+            raise ValueError(f"superseded_by: {superseded_by} is itself marked")
+        return SUPERSEDED + _unmarked(name), superseded_by, []
+    mine, fam = version_of(name), family_key(name)
+    kin = [d.name for d in sorted(lib.iterdir()) if d.is_dir() and d.name != old
+           and not d.name.startswith(MARK_PREFIXES) and family_key(d.name) == fam]
+    if not mine or not kin:
+        return name, "", []
+    versions = {k: version_of(k) for k in kin if version_of(k)}
+    same = [k for k, v in versions.items() if v == mine]
+    if same:
+        raise ValueError(f"{same[0]} is the same version of this document")
+    newer = sorted((k for k, v in versions.items() if v > mine), key=versions.get)
+    if newer:
+        return SUPERSEDED + name, newer[-1], []
+    return name, "", [k for k, v in versions.items() if v < mine]
+
+
+def rename_document(root: Path, old: str, name: str, dry=False, superseded_by: str = ""):
+    """Rename one document everywhere — folder and files, card, links across the Obsidian vault,
+    the parser's output/<stem> cache, the nightly queue — marking whatever the version rule
+    says is superseded. -> report lines. Raises ValueError, changing nothing, if it cannot."""
+    final, by, older = plan_rename(root, old, name, superseded_by)
+    jobs = [(old, final, by)] + [(k, SUPERSEDED + k, final) for k in older]
+    problems = [p for o, n, _ in jobs for p in rename_problems(root, o, n)]
+    if problems:
+        raise ValueError("; ".join(problems))
+    lines = []
+    for o, n, b in jobs:
+        lines += _rename(root, o, n, dry, b)
+    return lines
+
+
+def _rename(root: Path, old: str, new: str, dry: bool, superseded_by: str):
+    import cards
+    import corrections
+    vault, src, dst = obsidian_root(root), root / "Library" / old, root / "Library" / new
+    link = _link_re(old)
+    notes = [] if old == new else [f for f in _vault_files(vault) if f.suffix == ".md"
+                                   and link.search(f.read_text(encoding="utf-8", errors="replace"))]
+    moved = [] if old == new else [f for f in sorted(src.iterdir()) if f.name.startswith(old)]
+    cache = PARSE_CACHE
+    what = f"renamed from `{old}`: {len(moved)} file(s), links rewritten in {len(notes)} note(s)" \
+        if old != new else "unchanged name"
+    lines = [f"[[{new}]] {what}" + (f"; superseded by [[{superseded_by}]]" if superseded_by else "")]
+    if dry:
+        return ["would: " + lines[0]] + [f"  links in {n.relative_to(vault)}" for n in notes]
+
+    if old != new:
+        tmp = src.with_name(src.name + ".renaming")     # a case-only rename needs two steps
+        src.rename(tmp)
+        tmp.rename(dst)
+        for f in moved:
+            (dst / f.name).rename(dst / (new + f.name[len(old):]))
+    pdf = dst / (new + ".pdf")
+
+    data_file = dst / (new + ".data.json")
+    if data_file.exists():
+        data = json.loads(data_file.read_text(encoding="utf-8"))
+        data["document"]["file"] = pdf.name
+        write_text(data_file, json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
+    text_file = dst / (new + TEXT_SUFFIX)
+    if text_file.exists():                              # header only; the page text is left alone
+        text = text_file.read_text(encoding="utf-8")
+        i = text.find("=== PAGE ")
+        head = text[:i] if i >= 0 else text
+        head = head.replace(f"[[{old}.pdf]]", f"[[{pdf.name}]]").replace(f"# {old} — ", f"# {new} — ")
+        write_text(text_file, head + (text[i:] if i >= 0 else ""))
+
+    card = dst / (new + ".md")
+    if card.exists():
+        def done(props, fm):
+            was = props.get("renamed_from") or []
+            was = was if isinstance(was, list) else [was]
+            fixes = props.get(corrections.KEY)
+            fixes = fixes if isinstance(fixes, list) else [fixes] if fixes else []
+            left = [e for e in fixes if not re.match(r"\s*(name|superseded_by)\s*=", str(e))]
+            out = {corrections.KEY: corrections.block(corrections.KEY, left),
+                   corrections.REFUSED_KEY: []}
+            if old != new:
+                out["renamed_from"] = corrections.block("renamed_from", [*was, old])
+            if superseded_by:
+                out["superseded_by"] = [f"superseded_by: {json.dumps(f'[[{superseded_by}]]')}"]
+            return out
+        _edit_card(card, done)
+        if data_file.exists():
+            write_text(card, cards.render(card, json.loads(data_file.read_text(encoding="utf-8")), pdf))
+    if old == new:
+        return lines
+
+    def sub(m):
+        return m.group(1) + m.group(2).replace(f"/{old}/", f"/{new}/") + new
+    for n in notes:
+        n = dst / (new + n.name[len(old):]) if n.parent == src and n.name.startswith(old) else \
+            dst / n.name if n.parent == src else n
+        write_text(n, link.sub(sub, n.read_text(encoding="utf-8")))
+
+    if (cache / old).is_dir():
+        (cache / old).rename(cache / new)
+        lines.append(f"parse cache moved to `output/{new}`")
+    queue = INGEST_STATE / "nightly-docling.txt"
+    if queue.exists():
+        q = queue.read_text(encoding="utf-8").splitlines()
+        old_pdf = str(src / (old + ".pdf"))
+        if old_pdf in q:
+            write_text(queue, "".join(f"{str(pdf) if l == old_pdf else l}\n" for l in q))
+            lines.append("nightly Docling queue updated")
+    INGEST_STATE.mkdir(parents=True, exist_ok=True)
+    journal = INGEST_STATE / f"rename-journal-{time.time_ns()}.json"
+    write_text(journal, json.dumps({"old": old, "new": new, "folder": str(dst),
+                                    "superseded_by": superseded_by or None,
+                                    "notes": [str(n.relative_to(vault)) for n in notes]}, indent=1))
+    return lines
+
+
+def refuse_rename(root: Path, old: str, request: str, why: str):
+    """Record on the card why a rename request was not applied, so the next pass skips it."""
+    import corrections
+    key = corrections.REFUSED_KEY
+    _edit_card(root / "Library" / old / (old + ".md"),
+               lambda props, fm: {key: [f"{key}: {json.dumps(f'{request}: {why}', ensure_ascii=False)}"]})
+
+
+def cmd_rename(args):
+    root = root_of(find_vault(args.vault))
+    INGEST_STATE.mkdir(parents=True, exist_ok=True)
+    lock = open(INGEST_STATE / "lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("an ingest pass is running; try again when it finishes")
+    if args.old and not args.new:
+        sys.exit("rename OLD NEW: both names are needed")
+    todo = [(args.old, args.new, "")] if args.old else pending_renames(root)
+    failed = 0
+    for old, new, sb in todo:
+        try:
+            print("\n".join(rename_document(root, old, new, args.dry_run, sb)))
+        except ValueError as exc:
+            print(f"{old} -> {request_id(new, sb)} refused: {exc}")
+            failed += 1
+    if not todo:
+        print("no card carries a pending `fix: name = …`")
+    sys.exit(1 if failed else 0)
+
+
 # ── check ────────────────────────────────────────────────────────────────────
 _BAD_NAME = re.compile(r"\s\(\d+\)\.pdf$|^\d{10}_|_C\d{4,}\.pdf$", re.I)
 _LINK = re.compile(r"\[\[([^\]|#]+)")
@@ -478,10 +746,16 @@ def main():
     p.add_argument("--discard-edits", action="store_true",
                    help="also remove starter cards that have been filled in since")
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("rename", help="rename a filed document everywhere; no names = every "
+                                      "card's pending `fix: name = …`")
+    p.add_argument("old", nargs="?")
+    p.add_argument("new", nargs="?")
+    p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("check", help="audit filing conventions")
     p.add_argument("--limit", type=int, default=15)
     args = ap.parse_args()
-    {"plan": cmd_plan, "apply": cmd_apply, "undo": cmd_undo, "check": cmd_check}[args.cmd](args)
+    {"plan": cmd_plan, "apply": cmd_apply, "undo": cmd_undo, "rename": cmd_rename,
+     "check": cmd_check}[args.cmd](args)
 
 
 if __name__ == "__main__":
