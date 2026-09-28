@@ -90,9 +90,11 @@ def clean_name(stem: str) -> str:
     s = re.sub(r"\s*\(\d+\)$", "", stem)                       # "CH334DS1 (3)"
     s = re.sub(r"^\d{10}_", "", s)                              # LCSC download timestamp
     s = re.sub(r"_C\d{4,}$", "", s)                             # LCSC part code
+    s = re.sub(r"^\d{6,}[_ -]?(?=[A-Za-z]{2,}\d)", "", s)       # download ID: "61979758LR2021"
     s = re.sub(r"(?i)[_ -]?data[_ -]?sheet", "_DS", s)
     s = re.sub(r"\s+", "_", s.strip())
     s = _VER.sub(lambda m: "_V" + re.sub(r"[_p-]", ".", m.group(1)), s)
+    s = re.sub(r"(_V[\d.]+)_(DS|UM)$", r"_\2\1", s)            # type before version: LR2021_DS_V1.1
     s = re.sub(r"_+", "_", s).strip("_")
     return s
 
